@@ -1,0 +1,10 @@
+{
+  "sensors": {
+    "sensor_id_01": {
+      "current_reading": 0,
+      "last_sync": "05/16/2026 4:26 PM",
+      "sensorId": "sensor_id_01",
+      "status": "Normal"
+    }
+  }
+}
