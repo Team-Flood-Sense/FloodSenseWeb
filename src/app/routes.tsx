@@ -1,15 +1,13 @@
-import { createBrowserRouter } from 'react-router';
+import { createBrowserRouter, Navigate } from 'react-router';
 import { Root } from './Root';
-import { Dashboard } from './pages/Dashboard';
-import { SensorStatus } from './pages/SensorStatus';
-import { UserManagement } from './pages/UserManagement';
-import { SMSBlastLogs } from './pages/SMSBlastLogs';
 import { SignIn } from './pages/SignIn';
 import { ForgotPassword } from './pages/ForgotPassword';
 import { ChangePassword } from './pages/ChangePassword';
 import { Unauthorized } from './pages/Unauthorized';
-import { TwoFactorAuth } from './pages/TwoFactorAuth'; 
+import { TwoFactorAuth } from './pages/TwoFactorAuth';
+import { SetupAdmin } from './pages/SetupAdmin';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { loadDashboard, loadSensorStatus, loadUserManagement, loadSMSBlastLogs, loadResidents } from './pages/loaders';
 
 export const router = createBrowserRouter([
   // Public & Auth routes
@@ -20,6 +18,10 @@ export const router = createBrowserRouter([
   {
     path: '/2fa',
     Component: TwoFactorAuth,
+  },
+  {
+    path: '/setup',
+    Component: SetupAdmin,
   },
   {
     path: '/forgot-password',
@@ -34,7 +36,7 @@ export const router = createBrowserRouter([
     Component: Unauthorized,
   },
 
-  // Protected routes
+  // Protected routes (pages are code-split and loaded on demand)
   {
     path: '/',
     element: (
@@ -45,36 +47,40 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: (
-          <ProtectedRoute allowedRoles={['admin', 'operator', 'viewer']}>
-            <Dashboard />
-          </ProtectedRoute>
-        ),
+        lazy: loadDashboard,
       },
       {
         path: 'sensors',
-        element: (
-          <ProtectedRoute allowedRoles={['admin', 'operator', 'viewer']}>
-            <SensorStatus />
-          </ProtectedRoute>
-        ),
+        lazy: loadSensorStatus,
       },
       {
-        path: 'users',
-        element: (
-          <ProtectedRoute allowedRoles={['admin']}>
-            <UserManagement />
-          </ProtectedRoute>
-        ),
+        element: <ProtectedRoute allowedRoles={['admin']} />,
+        children: [
+          {
+            path: 'users',
+            lazy: loadUserManagement,
+          },
+        ],
       },
       {
-        path: 'sms-logs',
-        element: (
-          <ProtectedRoute allowedRoles={['admin', 'operator']}>
-            <SMSBlastLogs />
-          </ProtectedRoute>
-        ),
+        element: <ProtectedRoute allowedRoles={['admin', 'operator']} />,
+        children: [
+          {
+            path: 'sms-logs',
+            lazy: loadSMSBlastLogs,
+          },
+          {
+            path: 'residents',
+            lazy: loadResidents,
+          },
+        ],
       },
     ],
+  },
+
+  // Unknown URLs
+  {
+    path: '*',
+    element: <Navigate to="/" replace />,
   },
 ]);

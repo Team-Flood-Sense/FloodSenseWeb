@@ -3,7 +3,6 @@
   import App from "./app/App.tsx";
   import "./styles/index.css";
   import "leaflet/dist/leaflet.css";
-  import "./lib/firebase";
 
   createRoot(document.getElementById("root")!).render(<App />);
   

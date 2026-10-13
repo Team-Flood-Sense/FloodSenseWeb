@@ -1,7 +1,7 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { useEffect, useState } from 'react';
+import { Navigate, useNavigate } from 'react-router';
+import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/context/AuthContext';
 
 export function SignIn() {
   const navigate = useNavigate();
@@ -10,6 +10,15 @@ export function SignIn() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const { user, aal } = useAuth();
+  const [needsSetup, setNeedsSetup] = useState(false);
+
+  // First run: no admin exists yet → offer to create one
+  useEffect(() => {
+    supabase.rpc('admin_exists').then(({ data, error }) => {
+      if (!error && data === false) setNeedsSetup(true);
+    });
+  }, []);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -17,22 +26,26 @@ export function SignIn() {
     setLoading(true);
 
     try {
-      await signInWithEmailAndPassword(auth, email, password);
-      
+      // Deactivated accounts are banned by the admin-users function, so
+      // Supabase rejects them here with 'user_banned'.
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+
       navigate('/2fa'); 
       
     } catch (err: any) {
-      // Handle Firebase error codes
+      // Handle Supabase Auth error codes
       switch (err.code) {
-        case 'auth/user-not-found':
-        case 'auth/wrong-password':
-        case 'auth/invalid-credential':
+        case 'invalid_credentials':
           setError('Invalid email or password. Please try again.');
           break;
-        case 'auth/too-many-requests':
+        case 'email_not_confirmed':
+          setError('Please confirm your email address before signing in.');
+          break;
+        case 'over_request_rate_limit':
           setError('Too many failed attempts. Please try again later.');
           break;
-        case 'auth/user-disabled':
+        case 'user_banned':
           setError('This account has been disabled.');
           break;
         default:
@@ -43,8 +56,11 @@ export function SignIn() {
     }
   }
 
+  // Already signed in → continue where they belong
+  if (user && !loading) return <Navigate to={aal === 'aal2' ? '/' : '/2fa'} replace />;
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0f1923]">
+    <div className="relative min-h-screen flex items-center justify-center bg-[#0f1923]">
 
       {/* Background subtle pattern */}
       <div
@@ -82,16 +98,31 @@ export function SignIn() {
             <p className="text-sm text-slate-400 mt-1">Command Center</p>
           </div>
 
+          {needsSetup && (
+            <div className="mb-6 px-4 py-3 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sm text-sky-300">
+              <p>No administrator account exists yet.</p>
+              <button
+                type="button"
+                onClick={() => navigate('/setup')}
+                className="mt-2 font-semibold text-sky-400 hover:text-sky-200 underline"
+              >
+                Create the admin account →
+              </button>
+            </div>
+          )}
+
           {/* Form */}
           <form onSubmit={handleLogin} className="space-y-5">
 
             {/* Email Field */}
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-300">
+              <label htmlFor="signin-email" className="text-sm font-medium text-slate-300">
                 Email Address
               </label>
               <input
+                id="signin-email"
                 type="email"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="admin@floodsense.ph"
@@ -102,11 +133,13 @@ export function SignIn() {
 
             {/* Password Field */}
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-300">
+              <label htmlFor="signin-password" className="text-sm font-medium text-slate-300">
                 Password
               </label>
               <div className="relative">
                 <input
+                  id="signin-password"
+                  autoComplete="current-password"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -116,6 +149,7 @@ export function SignIn() {
                 />
                 <button
                   type="button"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors"
                 >
@@ -177,7 +211,7 @@ export function SignIn() {
 
           {/* Footer hint */}
           <p className="text-center text-xs text-slate-500 mt-6">
-            FloodSense · Barangay 659 Disaster Management System
+            FloodSense · Barangay Pamplona 3 Disaster Management System
           </p>
 
         </div>
