@@ -1,19 +1,10 @@
 import { motion, AnimatePresence } from 'motion/react';
 import { Edit2, Trash2, Search, UserPlus, X, AlertTriangle } from 'lucide-react';
-import { useState, useEffect } from 'react';
-import {
-  collection,
-  onSnapshot,
-  doc,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  serverTimestamp,
-} from 'firebase/firestore';
-import {
-  createUserWithEmailAndPassword,
-} from 'firebase/auth';
-import { db, auth } from '@/lib/firebase';
+import { useState, useEffect, useCallback } from 'react';
+import { FunctionsHttpError } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/context/AuthContext';
+import { useEscape } from '@/app/hooks/useEscape';
 
 interface User {
   id: string;
@@ -27,10 +18,37 @@ interface User {
   location: string;
 }
 
+const capitalizeRole = (role: string | null): User['role'] => {
+  switch ((role || '').toLowerCase()) {
+    case 'admin': return 'Admin';
+    case 'operator': return 'Operator';
+    default: return 'Viewer';
+  }
+};
+
+// Calls the admin-users Edge Function and surfaces its error message.
+async function invokeAdminUsers(body: Record<string, unknown>) {
+  const { data, error } = await supabase.functions.invoke('admin-users', { body });
+  if (error) {
+    let message = 'Something went wrong. Please try again.';
+    if (error instanceof FunctionsHttpError) {
+      try {
+        message = error.context.status === 404
+          ? 'The admin-users function is not deployed in this Supabase project.'
+          : (await error.context.json()).error || message;
+      } catch { /* non-JSON response */ }
+    }
+    throw new Error(message);
+  }
+  return data;
+}
+
 export function UserTable() {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [actionError, setActionError] = useState('');
 
   // Add modal
@@ -50,49 +68,78 @@ export function UserTable() {
   const [deletingUser, setDeletingUser] = useState<User | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  // ✅ Fetch users from Firestore in real-time
-  useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'users'), (snapshot) => {
-      const fetchedUsers: User[] = snapshot.docs.map((doc) => {
-        const data = doc.data();
+  // Escape closes whichever modal is open
+  const closeModals = useCallback(() => {
+    setShowAddModal(false);
+    setShowEditModal(false);
+    setShowDeleteModal(false);
+  }, []);
+  useEscape(showAddModal || showEditModal || showDeleteModal, closeModals);
 
-        // ✅ Convert Firestore Timestamp to readable string
-        let lastActive = 'Unknown';
-        if (data.lastActive && typeof data.lastActive.toDate === 'function') {
-          lastActive = data.lastActive.toDate().toLocaleString('en-PH', {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-          });
-        } else if (typeof data.lastActive === 'string') {
-          lastActive = data.lastActive;
-        }
+  // ✅ Fetch users from the profiles table
+  const fetchUsers = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .order('created_at', { ascending: true });
 
-        return {
-          id: doc.id,
-          name: data.name || data.email?.split('@')[0] || 'Unknown',
-          email: data.email || '',
-          phone: data.phone || 'N/A',
-          role: data.role || 'Viewer',
-          status: data.status || 'Active',
-          avatar: data.avatar || '',
-          lastActive,
-          location: data.location || 'N/A',
-        };
-      });
-      setUsers(fetchedUsers);
+    if (error) {
+      setLoadError('Failed to load users. Please refresh the page.');
       setLoading(false);
-    });
+      return;
+    }
+    setLoadError('');
 
-    return () => unsubscribe();
+    const fetchedUsers: User[] = (data ?? []).map((row) => {
+      // ✅ Convert timestamptz to readable string
+      let lastActive = 'Never';
+      if (row.last_active) {
+        lastActive = new Date(row.last_active).toLocaleString('en-PH', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      }
+
+      return {
+        id: row.id,
+        name: row.name || row.email?.split('@')[0] || 'Unknown',
+        email: row.email || '',
+        phone: row.phone || 'N/A',
+        role: capitalizeRole(row.role),
+        status: row.status || 'Active',
+        avatar: row.avatar || '',
+        lastActive,
+        location: row.location || 'N/A',
+      };
+    });
+    setUsers(fetchedUsers);
+    setLoading(false);
   }, []);
 
-  // ✅ Add User — creates Firebase Auth account + Firestore document
+  // ✅ Keep the table live with Supabase Realtime
+  useEffect(() => {
+    fetchUsers();
+
+    const channel = supabase
+      .channel('profiles-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+        fetchUsers();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchUsers]);
+
+  // ✅ Add User — the admin-users Edge Function creates the Auth account + profile
+  // (runs server-side, so the admin stays signed in)
   async function handleAddUser() {
     setActionError('');
-    if (!newUser.name || !newUser.email || !newUser.password) {
+    if (!newUser.name.trim() || !newUser.email.trim() || !newUser.password) {
       setActionError('Name, email, and password are required.');
       return;
     }
@@ -103,78 +150,82 @@ export function UserTable() {
 
     setAddLoading(true);
     try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        newUser.email,
-        newUser.password
-      );
-
-      // ✅ Use serverTimestamp() instead of 'Just now'
-      await setDoc(doc(db, 'users', userCredential.user.uid), {
-        name: newUser.name,
-        email: newUser.email,
+      await invokeAdminUsers({
+        action: 'create',
+        name: newUser.name.trim(),
+        email: newUser.email.trim(),
+        password: newUser.password,
         phone: newUser.phone,
-        role: newUser.role.toLowerCase(),
-        status: 'Active',
         location: newUser.location,
-        lastActive: serverTimestamp(),
-        avatar: '',
+        role: newUser.role.toLowerCase(),
       });
 
       setShowAddModal(false);
       setNewUser({ name: '', email: '', phone: '', role: 'Viewer', location: '', password: '' });
+      fetchUsers();
     } catch (err: any) {
-      switch (err.code) {
-        case 'auth/email-already-in-use':
-          setActionError('This email is already registered.');
-          break;
-        case 'auth/invalid-email':
-          setActionError('Please enter a valid email address.');
-          break;
-        default:
-          setActionError('Something went wrong. Please try again.');
-      }
+      setActionError(err.message || 'Something went wrong. Please try again.');
     } finally {
       setAddLoading(false);
     }
   }
 
-  // ✅ Edit User — updates Firestore document
+  // ✅ Edit User — updates the profiles row; status changes go through the
+  // admin-users function so deactivated users are also signed out (banned).
   async function handleEditUser() {
     if (!editingUser) return;
     setActionError('');
+    if (!editingUser.name.trim()) {
+      setActionError('Name cannot be empty.');
+      return;
+    }
     setEditLoading(true);
 
     try {
-      await updateDoc(doc(db, 'users', editingUser.id), {
-        name: editingUser.name,
-        phone: editingUser.phone,
-        role: editingUser.role.toLowerCase(),
-        status: editingUser.status,
-        location: editingUser.location,
-      });
+      const original = users.find((u) => u.id === editingUser.id);
+
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          name: editingUser.name.trim(),
+          phone: editingUser.phone === 'N/A' ? '' : editingUser.phone.trim(),
+          role: editingUser.role.toLowerCase(),
+          location: editingUser.location === 'N/A' ? '' : editingUser.location.trim(),
+        })
+        .eq('id', editingUser.id);
+      if (error) throw error;
+
+      if (original && original.status !== editingUser.status) {
+        await invokeAdminUsers({ action: 'set-status', id: editingUser.id, status: editingUser.status });
+      }
 
       setShowEditModal(false);
       setEditingUser(null);
-    } catch (err) {
-      setActionError('Failed to update user. Please try again.');
+      fetchUsers();
+    } catch (err: any) {
+      setActionError(
+        err?.message?.includes('last active admin')
+          ? 'There must always be at least one active admin.'
+          : err?.message || 'Failed to update user. Please try again.',
+      );
     } finally {
       setEditLoading(false);
     }
   }
 
-  // ✅ Delete User — removes Firestore document
+  // ✅ Delete User — removes the Auth account (profile row cascades)
   async function handleDeleteUser() {
     if (!deletingUser) return;
     setActionError('');
     setDeleteLoading(true);
 
     try {
-      await deleteDoc(doc(db, 'users', deletingUser.id));
+      await invokeAdminUsers({ action: 'delete', id: deletingUser.id });
       setShowDeleteModal(false);
       setDeletingUser(null);
-    } catch (err) {
-      setActionError('Failed to delete user. Please try again.');
+      fetchUsers();
+    } catch (err: any) {
+      setActionError(err.message || 'Failed to delete user. Please try again.');
     } finally {
       setDeleteLoading(false);
     }
@@ -197,24 +248,24 @@ export function UserTable() {
       return {
         background: 'linear-gradient(135deg, rgba(29, 112, 162, 0.15) 0%, rgba(29, 112, 162, 0.08) 100%)',
         border: '1px solid rgba(29, 112, 162, 0.3)',
-        color: '#1D70A2',
+        color: 'var(--link)',
       };
     } else {
       return {
-        background: 'linear-gradient(135deg, rgba(11, 60, 93, 0.15) 0%, rgba(11, 60, 93, 0.08) 100%)',
-        border: '1px solid rgba(11, 60, 93, 0.3)',
-        color: '#0B3C5D',
+        background: 'linear-gradient(135deg, rgba(var(--ink-rgb), 0.15) 0%, rgba(var(--ink-rgb), 0.08) 100%)',
+        border: '1px solid rgba(var(--ink-rgb), 0.3)',
+        color: 'rgb(var(--ink-rgb))',
       };
     }
   };
 
   const inputStyle = {
-    background: 'rgba(255, 255, 255, 0.6)',
+    background: 'rgba(var(--surface-rgb), 0.6)',
     border: '1px solid rgba(46, 196, 182, 0.2)',
     borderRadius: '12px',
     padding: '10px 14px',
     width: '100%',
-    color: '#0B3C5D',
+    color: 'rgb(var(--ink-rgb))',
     fontSize: '14px',
     outline: 'none',
   };
@@ -224,25 +275,25 @@ export function UserTable() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, delay: 0.2 }}
-        className="relative bg-white/80 backdrop-blur-xl overflow-hidden"
+        transition={{ duration: 0.25 }}
+        className="relative bg-surface/80 overflow-hidden"
         style={{
           borderRadius: '28px',
-          boxShadow: '0 20px 60px rgba(11, 60, 93, 0.12), 0 8px 32px rgba(11, 60, 93, 0.08)',
-          border: '1px solid rgba(255, 255, 255, 0.6)',
+          boxShadow: '0 20px 60px rgba(var(--shadow-rgb), 0.12), 0 8px 32px rgba(var(--shadow-rgb), 0.08)',
+          border: '1px solid rgba(var(--surface-rgb), 0.6)',
         }}
       >
-        <div className="absolute inset-0 bg-gradient-to-br from-white/50 to-transparent pointer-events-none" style={{ borderRadius: '28px' }} />
+        <div className="absolute inset-0 bg-gradient-to-br from-surface/50 to-transparent pointer-events-none" style={{ borderRadius: '28px' }} />
 
         <div className="relative z-10">
           {/* Header */}
-          <div className="p-8 border-b border-[#0B3C5D]/10">
+          <div className="p-8 border-b border-ink/10">
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h3 className="text-[#0B3C5D] text-2xl mb-1" style={{ fontWeight: 700 }}>
+                <h3 className="text-ink text-2xl mb-1" style={{ fontWeight: 700 }}>
                   User Management
                 </h3>
-                <p className="text-[#0B3C5D]/60 text-sm">
+                <p className="text-ink/60 text-sm">
                   Manage team members and permissions
                 </p>
               </div>
@@ -266,20 +317,19 @@ export function UserTable() {
             <div
               className="relative max-w-md"
               style={{
-                background: 'rgba(255, 255, 255, 0.6)',
-                backdropFilter: 'blur(20px)',
+                background: 'rgba(var(--surface-rgb), 0.6)',
                 borderRadius: '20px',
-                boxShadow: 'inset 0 0 1px 1px rgba(46, 196, 182, 0.2), 0 4px 16px rgba(11, 60, 93, 0.05)',
+                boxShadow: 'inset 0 0 1px 1px rgba(46, 196, 182, 0.2), 0 4px 16px rgba(var(--shadow-rgb), 0.05)',
                 border: '1px solid rgba(46, 196, 182, 0.15)',
               }}
             >
-              <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-[#0B3C5D]/40" size={20} />
+              <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-ink/40" size={20} />
               <input
                 type="text"
                 placeholder="Search users by name, email, or location..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-12 pr-4 py-3 bg-transparent text-[#0B3C5D] placeholder-[#0B3C5D]/40 text-sm outline-none"
+                className="w-full pl-12 pr-4 py-3 bg-transparent text-ink placeholder:text-ink/40 text-sm outline-none"
                 style={{ fontWeight: 500 }}
               />
             </div>
@@ -289,25 +339,29 @@ export function UserTable() {
           <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: '480px' }}>
             {loading ? (
               <div className="flex items-center justify-center py-20">
-                <p className="text-[#0B3C5D]/50 text-sm">Loading users...</p>
+                <p className="text-ink/50 text-sm">Loading users...</p>
+              </div>
+            ) : loadError ? (
+              <div className="flex items-center justify-center py-20">
+                <p className="text-[#ef4444] text-sm" style={{ fontWeight: 500 }}>⚠ {loadError}</p>
               </div>
             ) : (
               <table className="w-full">
                 <thead>
-                  <tr className="border-b border-[#0B3C5D]/10">
-                    <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-sm" style={{ fontWeight: 600 }}>User</th>
-                    <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-sm" style={{ fontWeight: 600 }}>Contact</th>
-                    <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-sm" style={{ fontWeight: 600 }}>Role</th>
-                    <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-sm" style={{ fontWeight: 600 }}>Status</th>
-                    <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-sm" style={{ fontWeight: 600 }}>Location</th>
-                    <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-sm" style={{ fontWeight: 600 }}>Last Active</th>
-                    <th className="text-center px-8 py-4 text-[#0B3C5D]/70 text-sm" style={{ fontWeight: 600 }}>Actions</th>
+                  <tr className="border-b border-ink/10 bg-ink/[0.04]">
+                    <th className="text-left px-8 py-4 text-ink/70 text-sm" style={{ fontWeight: 600 }}>User</th>
+                    <th className="text-left px-8 py-4 text-ink/70 text-sm" style={{ fontWeight: 600 }}>Contact</th>
+                    <th className="text-left px-8 py-4 text-ink/70 text-sm" style={{ fontWeight: 600 }}>Role</th>
+                    <th className="text-left px-8 py-4 text-ink/70 text-sm" style={{ fontWeight: 600 }}>Status</th>
+                    <th className="text-left px-8 py-4 text-ink/70 text-sm" style={{ fontWeight: 600 }}>Location</th>
+                    <th className="text-left px-8 py-4 text-ink/70 text-sm" style={{ fontWeight: 600 }}>Last Active</th>
+                    <th className="text-center px-8 py-4 text-ink/70 text-sm" style={{ fontWeight: 600 }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredUsers.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="text-center py-12 text-[#0B3C5D]/40 text-sm">
+                      <td colSpan={7} className="text-center py-12 text-ink/40 text-sm">
                         No users found.
                       </td>
                     </tr>
@@ -319,8 +373,8 @@ export function UserTable() {
                           key={user.id}
                           initial={{ opacity: 0, y: 10 }}
                           animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: 0.3 + index * 0.05 }}
-                          className="border-b border-[#0B3C5D]/5 hover-row group"
+                          transition={{ duration: 0.2, delay: Math.min(index, 8) * 0.03 }}
+                          className="border-b border-ink/5 user-row group"
                           style={{ transition: 'all 0.3s ease' }}
                         >
                           {/* User */}
@@ -332,8 +386,8 @@ export function UserTable() {
                                   style={{
                                     background: 'linear-gradient(135deg, #2EC4B6 0%, #1fa299 100%)',
                                     fontWeight: 700,
-                                    boxShadow: '0 8px 24px rgba(11, 60, 93, 0.2)',
-                                    border: '2px solid rgba(255, 255, 255, 0.8)',
+                                    boxShadow: '0 8px 24px rgba(var(--shadow-rgb), 0.2)',
+                                    border: '2px solid rgba(var(--surface-rgb), 0.8)',
                                   }}
                                 >
                                   {user.name.charAt(0).toUpperCase()}
@@ -348,7 +402,7 @@ export function UserTable() {
                                   />
                                 )}
                               </div>
-                              <span className="text-[#0B3C5D] text-sm" style={{ fontWeight: 600 }}>
+                              <span className="text-ink text-sm" style={{ fontWeight: 600 }}>
                                 {user.name}
                               </span>
                             </div>
@@ -357,8 +411,8 @@ export function UserTable() {
                           {/* Contact */}
                           <td className="px-8 py-5">
                             <div className="flex flex-col gap-0.5">
-                              <span className="text-[#0B3C5D]/70 text-sm">{user.email}</span>
-                              <span className="text-[#0B3C5D]/50 text-xs">{user.phone}</span>
+                              <span className="text-ink/70 text-sm">{user.email}</span>
+                              <span className="text-ink/50 text-xs">{user.phone}</span>
                             </div>
                           </td>
 
@@ -393,18 +447,19 @@ export function UserTable() {
 
                           {/* Location */}
                           <td className="px-8 py-5">
-                            <span className="text-[#0B3C5D]/70 text-sm">{user.location}</span>
+                            <span className="text-ink/70 text-sm">{user.location}</span>
                           </td>
 
                           {/* Last Active */}
                           <td className="px-8 py-5">
-                            <span className="text-[#0B3C5D]/60 text-sm">{user.lastActive}</span>
+                            <span className="text-ink/60 text-sm">{user.lastActive}</span>
                           </td>
 
                           {/* Actions */}
                           <td className="px-8 py-5">
                             <div className="flex items-center justify-center gap-2">
                               <motion.button
+                                aria-label={`Edit ${user.name}`}
                                 whileHover={{ scale: 1.1, y: -2 }}
                                 whileTap={{ scale: 0.95 }}
                                 onClick={() => { setEditingUser(user); setShowEditModal(true); setActionError(''); }}
@@ -414,10 +469,12 @@ export function UserTable() {
                                   boxShadow: '0 2px 8px rgba(29, 112, 162, 0.1)',
                                 }}
                               >
-                                <Edit2 className="text-[#1D70A2]" size={16} strokeWidth={2.5} />
+                                <Edit2 className="text-link" size={16} strokeWidth={2.5} />
                               </motion.button>
 
+                              {user.id !== currentUser?.id && (
                               <motion.button
+                                aria-label={`Delete ${user.name}`}
                                 whileHover={{ scale: 1.1, y: -2 }}
                                 whileTap={{ scale: 0.95 }}
                                 onClick={() => { setDeletingUser(user); setShowDeleteModal(true); setActionError(''); }}
@@ -429,6 +486,7 @@ export function UserTable() {
                               >
                                 <Trash2 className="text-[#FF6B35]" size={16} strokeWidth={2.5} />
                               </motion.button>
+                              )}
                             </div>
                           </td>
                         </motion.tr>
@@ -441,9 +499,9 @@ export function UserTable() {
           </div>
 
           {/* Footer */}
-          <div className="px-8 py-5 border-t border-[#0B3C5D]/10 bg-white/40">
+          <div className="px-8 py-5 border-t border-ink/10 bg-surface/40">
             <div className="flex items-center justify-between">
-              <span className="text-[#0B3C5D]/60 text-sm">
+              <span className="text-ink/60 text-sm">
                 Showing {filteredUsers.length} of {users.length} users
               </span>
               <div className="flex items-center gap-2">
@@ -453,9 +511,9 @@ export function UserTable() {
                     {users.filter(u => u.status === 'Active').length} Active
                   </span>
                 </div>
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#0B3C5D]/10">
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-ink/10">
                   <div className="w-2 h-2 rounded-full bg-[#6B7280]" />
-                  <span className="text-xs text-[#0B3C5D]/70" style={{ fontWeight: 600 }}>
+                  <span className="text-xs text-ink/70" style={{ fontWeight: 600 }}>
                     {users.filter(u => u.status === 'Inactive').length} Inactive
                   </span>
                 </div>
@@ -465,8 +523,7 @@ export function UserTable() {
         </div>
 
         <style>{`
-          .hover-row { cursor: pointer; }
-          .hover-row:hover {
+            .user-row:hover {
             background: linear-gradient(90deg, rgba(46, 196, 182, 0.03) 0%, rgba(46, 196, 182, 0.06) 50%, rgba(46, 196, 182, 0.03) 100%);
           }
         `}</style>
@@ -480,7 +537,7 @@ export function UserTable() {
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={() => setShowAddModal(false)}
               className="fixed inset-0 z-40"
-              style={{ background: 'rgba(11, 60, 93, 0.5)', backdropFilter: 'blur(4px)' }}
+              style={{ background: 'rgba(var(--ink-rgb), 0.5)', backdropFilter: 'blur(4px)' }}
             />
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -493,21 +550,20 @@ export function UserTable() {
               <div
                 className="w-full max-w-md p-8 relative"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.95)',
-                  backdropFilter: 'blur(20px)',
+                  background: 'rgba(var(--surface-rgb), 0.95)',
                   borderRadius: '28px',
-                  boxShadow: '0 20px 60px rgba(11, 60, 93, 0.2)',
+                  boxShadow: '0 20px 60px rgba(var(--shadow-rgb), 0.2)',
                   border: '1px solid rgba(46, 196, 182, 0.2)',
                   pointerEvents: 'all',
                 }}
               >
                 <div className="flex items-center justify-between mb-6">
                   <div>
-                    <h3 className="text-[#0B3C5D] text-xl" style={{ fontWeight: 700 }}>Add New User</h3>
-                    <p className="text-[#0B3C5D]/50 text-sm mt-0.5">Fill in the details to register a new team member</p>
+                    <h3 className="text-ink text-xl" style={{ fontWeight: 700 }}>Add New User</h3>
+                    <p className="text-ink/50 text-sm mt-0.5">Fill in the details to register a new team member</p>
                   </div>
-                  <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} onClick={() => setShowAddModal(false)} className="p-2 rounded-xl" style={{ background: 'rgba(11, 60, 93, 0.05)' }}>
-                    <X className="text-[#0B3C5D]/60" size={20} />
+                  <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} onClick={() => setShowAddModal(false)} className="p-2 rounded-xl" style={{ background: 'rgba(var(--ink-rgb), 0.05)' }}>
+                    <X className="text-ink/60" size={20} />
                   </motion.button>
                 </div>
 
@@ -520,7 +576,7 @@ export function UserTable() {
                     { label: 'Location', key: 'location', type: 'text', placeholder: 'e.g. District A Station' },
                   ].map(({ label, key, type, placeholder }) => (
                     <div key={key}>
-                      <label className="block text-[#0B3C5D] text-sm mb-1.5" style={{ fontWeight: 600 }}>{label}</label>
+                      <label className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>{label}</label>
                       <input
                         type={type}
                         placeholder={placeholder}
@@ -531,12 +587,11 @@ export function UserTable() {
                     </div>
                   ))}
                   <div>
-                    <label className="block text-[#0B3C5D] text-sm mb-1.5" style={{ fontWeight: 600 }}>Role</label>
+                    <label className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Role</label>
                     <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })} style={inputStyle}>
                       <option value="Admin">Admin</option>
                       <option value="Operator">Operator</option>
                       <option value="Viewer">Viewer</option>
-                      <option value="Resident">Resident</option>
                     </select>
                   </div>
                 </div>
@@ -549,7 +604,7 @@ export function UserTable() {
                   <button
                     onClick={() => setShowAddModal(false)}
                     className="flex-1 py-3 rounded-2xl text-sm"
-                    style={{ background: 'rgba(11, 60, 93, 0.05)', color: '#0B3C5D', fontWeight: 600, border: '1px solid rgba(11, 60, 93, 0.1)' }}
+                    style={{ background: 'rgba(var(--ink-rgb), 0.05)', color: 'rgb(var(--ink-rgb))', fontWeight: 600, border: '1px solid rgba(var(--ink-rgb), 0.1)' }}
                   >
                     Cancel
                   </button>
@@ -577,7 +632,7 @@ export function UserTable() {
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={() => setShowEditModal(false)}
               className="fixed inset-0 z-40"
-              style={{ background: 'rgba(11, 60, 93, 0.5)', backdropFilter: 'blur(4px)' }}
+              style={{ background: 'rgba(var(--ink-rgb), 0.5)', backdropFilter: 'blur(4px)' }}
             />
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -590,21 +645,20 @@ export function UserTable() {
               <div
                 className="w-full max-w-md p-8 relative"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.95)',
-                  backdropFilter: 'blur(20px)',
+                  background: 'rgba(var(--surface-rgb), 0.95)',
                   borderRadius: '28px',
-                  boxShadow: '0 20px 60px rgba(11, 60, 93, 0.2)',
+                  boxShadow: '0 20px 60px rgba(var(--shadow-rgb), 0.2)',
                   border: '1px solid rgba(46, 196, 182, 0.2)',
                   pointerEvents: 'all',
                 }}
               >
                 <div className="flex items-center justify-between mb-6">
                   <div>
-                    <h3 className="text-[#0B3C5D] text-xl" style={{ fontWeight: 700 }}>Edit User</h3>
-                    <p className="text-[#0B3C5D]/50 text-sm mt-0.5">Update the details for {editingUser.name}</p>
+                    <h3 className="text-ink text-xl" style={{ fontWeight: 700 }}>Edit User</h3>
+                    <p className="text-ink/50 text-sm mt-0.5">Update the details for {editingUser.name}</p>
                   </div>
-                  <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} onClick={() => setShowEditModal(false)} className="p-2 rounded-xl" style={{ background: 'rgba(11, 60, 93, 0.05)' }}>
-                    <X className="text-[#0B3C5D]/60" size={20} />
+                  <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} onClick={() => setShowEditModal(false)} className="p-2 rounded-xl" style={{ background: 'rgba(var(--ink-rgb), 0.05)' }}>
+                    <X className="text-ink/60" size={20} />
                   </motion.button>
                 </div>
 
@@ -615,7 +669,7 @@ export function UserTable() {
                     { label: 'Location', key: 'location', type: 'text' },
                   ].map(({ label, key, type }) => (
                     <div key={key}>
-                      <label className="block text-[#0B3C5D] text-sm mb-1.5" style={{ fontWeight: 600 }}>{label}</label>
+                      <label className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>{label}</label>
                       <input
                         type={type}
                         value={editingUser[key as keyof User] as string}
@@ -625,7 +679,7 @@ export function UserTable() {
                     </div>
                   ))}
                   <div>
-                    <label className="block text-[#0B3C5D] text-sm mb-1.5" style={{ fontWeight: 600 }}>Role</label>
+                    <label className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Role</label>
                     <select value={editingUser.role} onChange={(e) => setEditingUser({ ...editingUser, role: e.target.value as User['role'] })} style={inputStyle}>
                       <option value="Admin">Admin</option>
                       <option value="Operator">Operator</option>
@@ -633,7 +687,7 @@ export function UserTable() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-[#0B3C5D] text-sm mb-1.5" style={{ fontWeight: 600 }}>Status</label>
+                    <label className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Status</label>
                     <select value={editingUser.status} onChange={(e) => setEditingUser({ ...editingUser, status: e.target.value as User['status'] })} style={inputStyle}>
                       <option value="Active">Active</option>
                       <option value="Inactive">Inactive</option>
@@ -649,7 +703,7 @@ export function UserTable() {
                   <button
                     onClick={() => setShowEditModal(false)}
                     className="flex-1 py-3 rounded-2xl text-sm"
-                    style={{ background: 'rgba(11, 60, 93, 0.05)', color: '#0B3C5D', fontWeight: 600, border: '1px solid rgba(11, 60, 93, 0.1)' }}
+                    style={{ background: 'rgba(var(--ink-rgb), 0.05)', color: 'rgb(var(--ink-rgb))', fontWeight: 600, border: '1px solid rgba(var(--ink-rgb), 0.1)' }}
                   >
                     Cancel
                   </button>
@@ -677,7 +731,7 @@ export function UserTable() {
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={() => setShowDeleteModal(false)}
               className="fixed inset-0 z-40"
-              style={{ background: 'rgba(11, 60, 93, 0.5)', backdropFilter: 'blur(4px)' }}
+              style={{ background: 'rgba(var(--ink-rgb), 0.5)', backdropFilter: 'blur(4px)' }}
             />
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -690,10 +744,9 @@ export function UserTable() {
               <div
                 className="w-full max-w-sm p-8 relative"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.95)',
-                  backdropFilter: 'blur(20px)',
+                  background: 'rgba(var(--surface-rgb), 0.95)',
                   borderRadius: '28px',
-                  boxShadow: '0 20px 60px rgba(11, 60, 93, 0.2)',
+                  boxShadow: '0 20px 60px rgba(var(--shadow-rgb), 0.2)',
                   border: '1px solid rgba(255, 107, 53, 0.2)',
                   pointerEvents: 'all',
                 }}
@@ -704,9 +757,9 @@ export function UserTable() {
                   </div>
                 </div>
 
-                <h3 className="text-[#0B3C5D] text-xl text-center mb-2" style={{ fontWeight: 700 }}>Delete User</h3>
-                <p className="text-[#0B3C5D]/60 text-sm text-center mb-6">
-                  Are you sure you want to delete <span className="font-semibold text-[#0B3C5D]">{deletingUser.name}</span>? This action cannot be undone.
+                <h3 className="text-ink text-xl text-center mb-2" style={{ fontWeight: 700 }}>Delete User</h3>
+                <p className="text-ink/60 text-sm text-center mb-6">
+                  Are you sure you want to delete <span className="font-semibold text-ink">{deletingUser.name}</span>? This action cannot be undone.
                 </p>
 
                 {actionError && (
@@ -717,7 +770,7 @@ export function UserTable() {
                   <button
                     onClick={() => setShowDeleteModal(false)}
                     className="flex-1 py-3 rounded-2xl text-sm"
-                    style={{ background: 'rgba(11, 60, 93, 0.05)', color: '#0B3C5D', fontWeight: 600, border: '1px solid rgba(11, 60, 93, 0.1)' }}
+                    style={{ background: 'rgba(var(--ink-rgb), 0.05)', color: 'rgb(var(--ink-rgb))', fontWeight: 600, border: '1px solid rgba(var(--ink-rgb), 0.1)' }}
                   >
                     Cancel
                   </button>
