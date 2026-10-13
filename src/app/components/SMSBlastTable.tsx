@@ -1,98 +1,55 @@
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Calendar, Send, Cpu, User, AlertCircle, Info, AlertTriangle, X, MapPin, Clock, Users } from 'lucide-react';
-import { useState } from 'react';
+import { Search, Calendar, Send, Cpu, User, AlertCircle, Info, AlertTriangle, X, MapPin, Clock, Users, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase';
+import { SMS_AREAS, countRecipients, sendBlast, type BlastLevel } from '@/lib/sms';
+import { useEscape } from '@/app/hooks/useEscape';
 
 interface SMSBlast {
   id: string;
+  displayId: string;
+  createdAt: Date;
   timestamp: string;
   message: string;
   recipients: number;
-  status: 'Delivered' | 'Pending' | 'Failed';
+  status: 'Pending' | 'Sending' | 'Sent' | 'Delivered' | 'Failed';
   level: 'CRITICAL' | 'WARNING' | 'INFO';
   triggerSource: 'System' | 'Manual';
   triggeredBy: string;
   location: string;
+  errorMessage: string | null;
 }
 
-const blastData: SMSBlast[] = [
-  {
-    id: 'BL-2026-0847',
-    timestamp: '2026-02-26 14:35:22',
-    message: 'CRITICAL ALERT: Flood Level at 2.1m - Immediate evacuation required for District A residents',
-    recipients: 1248,
-    status: 'Delivered',
-    level: 'CRITICAL',
-    triggerSource: 'System',
-    triggeredBy: 'Auto-Detection',
-    location: 'District A - River Bridge',
-  },
-  {
-    id: 'BL-2026-0846',
-    timestamp: '2026-02-26 13:22:15',
-    message: 'WARNING: Rising water levels detected. Monitor conditions and prepare evacuation kits.',
-    recipients: 856,
-    status: 'Delivered',
-    level: 'WARNING',
-    triggerSource: 'Manual',
-    triggeredBy: 'Maria Santos',
-    location: 'District B - Central Park',
-  },
-  {
-    id: 'BL-2026-0845',
-    timestamp: '2026-02-26 12:10:08',
-    message: 'INFO: System maintenance scheduled for tonight 22:00-23:00. Brief service interruption expected.',
-    recipients: 2341,
-    status: 'Delivered',
-    level: 'INFO',
-    triggerSource: 'Manual',
-    triggeredBy: 'Juan Dela Cruz',
-    location: 'All Districts',
-  },
-  {
-    id: 'BL-2026-0844',
-    timestamp: '2026-02-26 11:45:33',
-    message: 'WARNING: Heavy rainfall forecast for next 6 hours. Stay alert and avoid low-lying areas.',
-    recipients: 1567,
-    status: 'Delivered',
-    level: 'WARNING',
-    triggerSource: 'System',
-    triggeredBy: 'Auto-Detection',
-    location: 'District C - Dam Site',
-  },
-  {
-    id: 'BL-2026-0843',
-    timestamp: '2026-02-26 10:18:47',
-    message: 'CRITICAL ALERT: Dam gates opening at 11:00. Evacuate downstream areas immediately.',
-    recipients: 2089,
-    status: 'Delivered',
-    level: 'CRITICAL',
-    triggerSource: 'Manual',
-    triggeredBy: 'Ana Reyes',
-    location: 'District C - Dam Site',
-  },
-  {
-    id: 'BL-2026-0842',
-    timestamp: '2026-02-26 09:05:12',
-    message: 'INFO: Water level stable. All clear for District D morning activities.',
-    recipients: 743,
-    status: 'Delivered',
-    level: 'INFO',
-    triggerSource: 'System',
-    triggeredBy: 'Auto-Detection',
-    location: 'District D - Industrial Zone',
-  },
-  {
-    id: 'BL-2026-0841',
-    timestamp: '2026-02-26 07:42:55',
-    message: 'WARNING: Sensor maintenance in progress. Temporary monitoring gaps possible.',
-    recipients: 312,
-    status: 'Pending',
-    level: 'WARNING',
-    triggerSource: 'Manual',
-    triggeredBy: 'Carlos Mendoza',
-    location: 'District A - Station 12',
-  },
-];
+const MAX_CHARS = 160;
+// Two concatenated SMS segments; matches the database check (480 incl. margin)
+const HARD_LIMIT = 306;
+
+function toBlast(row: any): SMSBlast {
+  const createdAt = new Date(row.created_at);
+  return {
+    id: row.id,
+    displayId: `BL-${String(row.id).slice(0, 8).toUpperCase()}`,
+    createdAt,
+    timestamp: createdAt.toLocaleString('en-PH', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }),
+    message: row.message,
+    recipients: row.recipients ?? 0,
+    status: row.status,
+    level: row.level,
+    triggerSource: row.trigger_source,
+    triggeredBy: row.triggered_by_name || (row.trigger_source === 'System' ? 'Auto-Detection' : 'Unknown'),
+    location: row.location,
+    errorMessage: row.error_message ?? null,
+  };
+}
+
+// YYYY-MM-DD in local time, to compare with <input type="date">
+function localDateKey(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 
 const getLevelStyle = (level: string) => {
   switch (level) {
@@ -122,17 +79,20 @@ const getLevelStyle = (level: string) => {
       };
     default:
       return {
-        background: 'linear-gradient(135deg, rgba(11, 60, 93, 0.15) 0%, rgba(11, 60, 93, 0.08) 100%)',
-        border: '1px solid rgba(11, 60, 93, 0.3)',
-        color: '#0B3C5D',
+        background: 'linear-gradient(135deg, rgba(var(--ink-rgb), 0.15) 0%, rgba(var(--ink-rgb), 0.08) 100%)',
+        border: '1px solid rgba(var(--ink-rgb), 0.3)',
+        color: 'rgb(var(--ink-rgb))',
         icon: Info,
-        glow: '0 0 16px rgba(11, 60, 93, 0.3)',
+        glow: '0 0 16px rgba(var(--shadow-rgb), 0.3)',
       };
   }
 };
 
 const getStatusStyle = (status: string) => {
   switch (status) {
+    case 'Sending':
+      return { background: 'rgba(29, 112, 162, 0.12)', border: '1px solid rgba(29, 112, 162, 0.35)', color: 'var(--link)' };
+    case 'Sent':
     case 'Delivered':
       return { background: 'rgba(46, 196, 182, 0.1)', border: '1px solid rgba(46, 196, 182, 0.3)', color: '#2EC4B6' };
     case 'Pending':
@@ -140,71 +100,201 @@ const getStatusStyle = (status: string) => {
     case 'Failed':
       return { background: 'rgba(220, 38, 38, 0.1)', border: '1px solid rgba(220, 38, 38, 0.3)', color: '#DC2626' };
     default:
-      return { background: 'rgba(11, 60, 93, 0.1)', border: '1px solid rgba(11, 60, 93, 0.3)', color: '#0B3C5D' };
+      return { background: 'rgba(var(--ink-rgb), 0.1)', border: '1px solid rgba(var(--ink-rgb), 0.3)', color: 'rgb(var(--ink-rgb))' };
   }
 };
 
 export function SMSBlastTable() {
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedDate, setSelectedDate] = useState('2026-02-26');
+  const [selectedDate, setSelectedDate] = useState('');
+  const [blasts, setBlasts] = useState<SMSBlast[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [sending, setSending] = useState(false);
+  const [composeError, setComposeError] = useState('');
+  const [recipientCount, setRecipientCount] = useState<number | null>(null);
+  const [notice, setNotice] = useState<{ tone: 'success' | 'warn' | 'error'; text: string } | null>(null);
 
   // Compose modal
   const [showComposeModal, setShowComposeModal] = useState(false);
-  const [newBlast, setNewBlast] = useState({ level: 'INFO', location: '', message: '' });
+  // A single failed blast, or 'all' failed blasts, waiting for delete confirmation
+  const [deleteTarget, setDeleteTarget] = useState<SMSBlast | 'all' | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const [newBlast, setNewBlast] = useState<{ level: BlastLevel; location: string; message: string }>({ level: 'INFO', location: '', message: '' });
 
   // View Details modal
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedBlast, setSelectedBlast] = useState<SMSBlast | null>(null);
 
-  // ADD this line after all the useState lines
-  const currentUser = JSON.parse(localStorage.getItem('floodsense_user') || '{}');
+  // ✅ Load blasts from Supabase and keep them live with Realtime
+  const fetchBlasts = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('sms_blasts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (error) {
+      setLoadError('Failed to load SMS blast logs. Please refresh the page.');
+    } else {
+      setLoadError('');
+      setBlasts((data ?? []).map(toBlast));
+    }
+    setLoading(false);
+  }, []);
 
-  const filteredBlasts = blastData.filter(blast =>
-    blast.message.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    blast.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    blast.triggeredBy.toLowerCase().includes(searchQuery.toLowerCase())
+  useEffect(() => {
+    fetchBlasts();
+    const channel = supabase
+      .channel('sms-blasts-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sms_blasts' }, () => {
+        fetchBlasts();
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchBlasts]);
+
+  const closeModals = useCallback(() => {
+    setShowDetailsModal(false);
+    setShowComposeModal(false);
+  }, []);
+  const closeDelete = useCallback(() => {
+    setDeleteTarget(null);
+    setDeleteError('');
+  }, []);
+  useEscape(showDetailsModal || showComposeModal, closeModals);
+  useEscape(deleteTarget !== null, closeDelete);
+
+  const failedCount = blasts.filter((b) => b.status === 'Failed').length;
+
+  // Only 'Failed' blasts can be deleted (the database enforces this too)
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError('');
+    let q = supabase.from('sms_blasts').delete().eq('status', 'Failed');
+    if (deleteTarget !== 'all') q = q.eq('id', deleteTarget.id);
+    const { data, error } = await q.select('id');
+    setDeleting(false);
+
+    if (error) {
+      setDeleteError('Failed to delete. Please try again.');
+      return;
+    }
+    const n = data?.length ?? 0;
+    setDeleteTarget(null);
+    setNotice({ tone: 'success', text: n === 0 ? 'Nothing was deleted.' : `Deleted ${n} failed blast${n === 1 ? '' : 's'}.` });
+    fetchBlasts();
+  }
+
+  useEffect(() => {
+    if (!showComposeModal || !newBlast.location) {
+      setRecipientCount(null);
+      return;
+    }
+    let cancelled = false;
+    setRecipientCount(null);
+    countRecipients(newBlast.location).then((n) => {
+      if (!cancelled) setRecipientCount(n);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [showComposeModal, newBlast.location]);
+
+  const query = searchQuery.toLowerCase();
+  const filteredBlasts = blasts.filter(blast =>
+    (!selectedDate || localDateKey(blast.createdAt) === selectedDate) &&
+    (blast.message.toLowerCase().includes(query) ||
+      blast.location.toLowerCase().includes(query) ||
+      blast.triggeredBy.toLowerCase().includes(query))
   );
 
+  async function handleSendBlast() {
+    setComposeError('');
+    const message = newBlast.message.trim();
+    if (!newBlast.location) {
+      setComposeError('Please select a target location.');
+      return;
+    }
+    if (!message) {
+      setComposeError('Please enter a message.');
+      return;
+    }
+    if (message.length > HARD_LIMIT) {
+      setComposeError(`Message is too long (max ${HARD_LIMIT} characters).`);
+      return;
+    }
+
+    if (recipientCount === 0) {
+      setComposeError('There are no active, verified residents in this area. Add residents first.');
+      return;
+    }
+
+    setSending(true);
+    try {
+      const outcome = await sendBlast({ message, level: newBlast.level, location: newBlast.location });
+      setShowComposeModal(false);
+      setNewBlast({ level: 'INFO', location: '', message: '' });
+
+      if (outcome.kind === 'sent') {
+        setNotice({
+          tone: outcome.warning ? 'warn' : 'success',
+          text: `Sent to ${outcome.recipients.toLocaleString()} resident${outcome.recipients === 1 ? '' : 's'}.${outcome.warning ? ' ' + outcome.warning : ''}`,
+        });
+      } else if (outcome.kind === 'pending') {
+        setNotice({ tone: 'warn', text: `Saved as Pending. ${outcome.reason}` });
+      } else {
+        setNotice({ tone: 'error', text: `Sending failed: ${outcome.error}` });
+      }
+      fetchBlasts();
+    } catch (err) {
+      setComposeError((err as Error).message);
+    } finally {
+      setSending(false);
+    }
+  }
+
   const inputStyle = {
-    background: 'rgba(255, 255, 255, 0.6)',
+    background: 'rgba(var(--surface-rgb), 0.6)',
     border: '1px solid rgba(46, 196, 182, 0.2)',
     borderRadius: '12px',
     padding: '10px 14px',
     width: '100%',
-    color: '#0B3C5D',
+    color: 'rgb(var(--ink-rgb))',
     fontSize: '14px',
     outline: 'none',
   };
-
-  const MAX_CHARS = 160;
 
   return (
     <>
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, delay: 0.2 }}
-        className="relative bg-white/80 backdrop-blur-xl overflow-hidden"
+        transition={{ duration: 0.25 }}
+        className="relative bg-surface/80 overflow-hidden"
         style={{
           borderRadius: '28px',
-          boxShadow: '0 20px 60px rgba(11, 60, 93, 0.12), 0 8px 32px rgba(11, 60, 93, 0.08)',
-          border: '1px solid rgba(255, 255, 255, 0.6)',
+          boxShadow: '0 20px 60px rgba(var(--shadow-rgb), 0.12), 0 8px 32px rgba(var(--shadow-rgb), 0.08)',
+          border: '1px solid rgba(var(--surface-rgb), 0.6)',
         }}
       >
-        <div className="absolute inset-0 bg-gradient-to-br from-white/50 to-transparent pointer-events-none" style={{ borderRadius: '28px' }} />
+        <div className="absolute inset-0 bg-gradient-to-br from-surface/50 to-transparent pointer-events-none" style={{ borderRadius: '28px' }} />
 
         <div className="relative z-10">
           {/* Header */}
-          <div className="p-8 border-b border-[#0B3C5D]/10">
+          <div className="p-8 border-b border-ink/10">
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h3 className="text-[#0B3C5D] text-2xl mb-1" style={{ fontWeight: 700 }}>SMS Blast Logs</h3>
-                <p className="text-[#0B3C5D]/60 text-sm">Complete audit trail of emergency communications</p>
+                <h3 className="text-ink text-2xl mb-1" style={{ fontWeight: 700 }}>SMS Blast Logs</h3>
+                <p className="text-ink/60 text-sm">Complete audit trail of emergency communications</p>
               </div>
               <motion.button
                 whileHover={{ scale: 1.05, y: -2 }}
                 whileTap={{ scale: 0.98 }}
-                onClick={() => setShowComposeModal(true)}
+                onClick={() => { setComposeError(''); setShowComposeModal(true); }}
                 className="flex items-center gap-2 px-6 py-3 rounded-full"
                 style={{
                   background: 'linear-gradient(135deg, #2EC4B6 0%, #1fa299 100%)',
@@ -222,62 +312,87 @@ export function SMSBlastTable() {
               <div
                 className="relative flex-1"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.6)',
-                  backdropFilter: 'blur(20px)',
+                  background: 'rgba(var(--surface-rgb), 0.6)',
                   borderRadius: '20px',
-                  boxShadow: 'inset 0 0 1px 1px rgba(46, 196, 182, 0.2), 0 4px 16px rgba(11, 60, 93, 0.05)',
+                  boxShadow: 'inset 0 0 1px 1px rgba(46, 196, 182, 0.2), 0 4px 16px rgba(var(--shadow-rgb), 0.05)',
                   border: '1px solid rgba(46, 196, 182, 0.15)',
                 }}
               >
-                <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-[#0B3C5D]/40" size={20} />
+                <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-ink/40" size={20} />
                 <input
                   type="text"
                   placeholder="Search by message, location, or user..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3 bg-transparent text-[#0B3C5D] placeholder-[#0B3C5D]/40 text-sm outline-none"
+                  className="w-full pl-12 pr-4 py-3 bg-transparent text-ink placeholder:text-ink/40 text-sm outline-none"
                   style={{ fontWeight: 500 }}
                 />
               </div>
               <div
                 className="relative"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.6)',
-                  backdropFilter: 'blur(20px)',
+                  background: 'rgba(var(--surface-rgb), 0.6)',
                   borderRadius: '20px',
-                  boxShadow: 'inset 0 0 1px 1px rgba(46, 196, 182, 0.2), 0 4px 16px rgba(11, 60, 93, 0.05)',
+                  boxShadow: 'inset 0 0 1px 1px rgba(46, 196, 182, 0.2), 0 4px 16px rgba(var(--shadow-rgb), 0.05)',
                   border: '1px solid rgba(46, 196, 182, 0.15)',
                 }}
               >
-                <Calendar className="absolute left-4 top-1/2 transform -translate-y-1/2 text-[#0B3C5D]/40" size={20} />
+                <Calendar className="absolute left-4 top-1/2 transform -translate-y-1/2 text-ink/40" size={20} />
                 <input
                   type="date"
+                  aria-label="Filter by date"
                   value={selectedDate}
                   onChange={(e) => setSelectedDate(e.target.value)}
-                  className="pl-12 pr-4 py-3 bg-transparent text-[#0B3C5D] text-sm outline-none"
+                  className="pl-12 pr-4 py-3 bg-transparent text-ink text-sm outline-none"
                   style={{ fontWeight: 500, minWidth: '200px' }}
                 />
               </div>
             </div>
           </div>
 
+          {notice && (
+            <div
+              role="status"
+              className="mx-8 mt-4 flex items-start justify-between gap-4 px-4 py-3 rounded-2xl text-sm"
+              style={{
+                background: notice.tone === 'success' ? 'rgba(46, 196, 182, 0.12)' : notice.tone === 'warn' ? 'rgba(255, 184, 77, 0.14)' : 'rgba(220, 38, 38, 0.1)',
+                border: `1px solid ${notice.tone === 'success' ? 'rgba(46, 196, 182, 0.35)' : notice.tone === 'warn' ? 'rgba(255, 184, 77, 0.4)' : 'rgba(220, 38, 38, 0.3)'}`,
+                color: notice.tone === 'success' ? '#2EC4B6' : notice.tone === 'warn' ? '#E0A030' : '#EF4444',
+                fontWeight: 600,
+              }}
+            >
+              <span>{notice.text}</span>
+              <button type="button" aria-label="Dismiss" onClick={() => setNotice(null)} className="shrink-0 opacity-70 hover:opacity-100">
+                <X size={16} />
+              </button>
+            </div>
+          )}
+
           {/* Table */}
           <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: '480px' }}>
             <table className="w-full">
               <thead>
-                <tr className="border-b border-[#0B3C5D]/10">
-                  <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-xs" style={{ fontWeight: 600 }}>BLAST ID</th>
-                  <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-xs" style={{ fontWeight: 600 }}>TIMESTAMP</th>
-                  <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-xs" style={{ fontWeight: 600 }}>MESSAGE</th>
-                  <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-xs" style={{ fontWeight: 600 }}>RECIPIENTS</th>
-                  <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-xs" style={{ fontWeight: 600 }}>LEVEL</th>
-                  <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-xs" style={{ fontWeight: 600 }}>TRIGGER</th>
-                  <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-xs" style={{ fontWeight: 600 }}>STATUS</th>
-                  <th className="text-left px-8 py-4 text-[#0B3C5D]/70 text-xs" style={{ fontWeight: 600 }}>LOCATION</th>
+                <tr className="border-b border-ink/10 bg-ink/[0.04]">
+                  <th className="text-left px-8 py-4 text-ink/70 text-xs" style={{ fontWeight: 600 }}>BLAST ID</th>
+                  <th className="text-left px-8 py-4 text-ink/70 text-xs" style={{ fontWeight: 600 }}>TIMESTAMP</th>
+                  <th className="text-left px-8 py-4 text-ink/70 text-xs" style={{ fontWeight: 600 }}>MESSAGE</th>
+                  <th className="text-left px-8 py-4 text-ink/70 text-xs" style={{ fontWeight: 600 }}>RECIPIENTS</th>
+                  <th className="text-left px-8 py-4 text-ink/70 text-xs" style={{ fontWeight: 600 }}>LEVEL</th>
+                  <th className="text-left px-8 py-4 text-ink/70 text-xs" style={{ fontWeight: 600 }}>TRIGGER</th>
+                  <th className="text-left px-8 py-4 text-ink/70 text-xs" style={{ fontWeight: 600 }}>STATUS</th>
+                  <th className="text-left px-8 py-4 text-ink/70 text-xs" style={{ fontWeight: 600 }}>LOCATION</th>
+                  <th className="text-center px-8 py-4 text-ink/70 text-xs" style={{ fontWeight: 600 }}>ACTIONS</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredBlasts.map((blast, index) => {
+                {(loading || loadError || filteredBlasts.length === 0) && (
+                  <tr>
+                    <td colSpan={9} className="text-center py-12 text-sm" style={{ color: loadError ? '#ef4444' : 'rgba(var(--ink-rgb), 0.4)' }}>
+                      {loading ? 'Loading blast logs...' : loadError ? `⚠ ${loadError}` : 'No SMS blasts found.'}
+                    </td>
+                  </tr>
+                )}
+                {!loading && !loadError && filteredBlasts.map((blast, index) => {
                   const levelStyle = getLevelStyle(blast.level);
                   const statusStyle = getStatusStyle(blast.status);
                   const LevelIcon = levelStyle.icon;
@@ -286,8 +401,8 @@ export function SMSBlastTable() {
                       key={blast.id}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.3 + index * 0.05 }}
-                      className="border-b border-[#0B3C5D]/5 hover-row group"
+                      transition={{ duration: 0.2, delay: Math.min(index, 8) * 0.03 }}
+                      className="border-b border-ink/5 sms-row group"
                       style={{ transition: 'all 0.3s ease' }}
                       onClick={() => {
                         setSelectedBlast(blast);
@@ -295,18 +410,18 @@ export function SMSBlastTable() {
                       }}
                     >
                       <td className="px-8 py-4">
-                        <span className="text-[#0B3C5D] text-xs" style={{ fontWeight: 700, fontFamily: 'monospace' }}>{blast.id}</span>
+                        <span className="text-ink text-xs" style={{ fontWeight: 700, fontFamily: 'monospace' }}>{blast.displayId}</span>
                       </td>
                       <td className="px-8 py-4">
-                        <span className="text-[#0B3C5D]/70 text-xs" style={{ fontFamily: 'monospace' }}>{blast.timestamp}</span>
+                        <span className="text-ink/70 text-xs" style={{ fontFamily: 'monospace' }}>{blast.timestamp}</span>
                       </td>
                       <td className="px-8 py-4" style={{ maxWidth: '300px' }}>
-                        <div className="text-[#0B3C5D] text-xs line-clamp-2" style={{ fontWeight: 500 }}>{blast.message}</div>
+                        <div className="text-ink text-xs line-clamp-2" style={{ fontWeight: 500 }}>{blast.message}</div>
                         <span className="text-[#2EC4B6] text-xs mt-0.5 block" style={{ fontWeight: 600 }}>Click to view full message</span>
                       </td>
                       <td className="px-8 py-4">
-                        <div className="px-3 py-1.5 rounded-full inline-block" style={{ background: 'rgba(11, 60, 93, 0.08)', border: '1px solid rgba(11, 60, 93, 0.15)' }}>
-                          <span className="text-[#0B3C5D] text-xs" style={{ fontWeight: 700 }}>{blast.recipients.toLocaleString()}</span>
+                        <div className="px-3 py-1.5 rounded-full inline-block" style={{ background: 'rgba(var(--ink-rgb), 0.08)', border: '1px solid rgba(var(--ink-rgb), 0.15)' }}>
+                          <span className="text-ink text-xs" style={{ fontWeight: 700 }}>{blast.status === 'Pending' || blast.status === 'Sending' ? '—' : blast.recipients.toLocaleString()}</span>
                         </div>
                       </td>
                       <td className="px-8 py-4">
@@ -324,29 +439,43 @@ export function SMSBlastTable() {
                                 ? 'linear-gradient(135deg, rgba(46, 196, 182, 0.1) 0%, rgba(46, 196, 182, 0.05) 100%)'
                                 : 'linear-gradient(135deg, rgba(29, 112, 162, 0.1) 0%, rgba(29, 112, 162, 0.05) 100%)',
                               boxShadow: blast.triggerSource === 'System'
-                                ? '0 2px 8px rgba(46, 196, 182, 0.15), inset 0 1px 2px rgba(255, 255, 255, 0.8)'
-                                : '0 2px 8px rgba(29, 112, 162, 0.15), inset 0 1px 2px rgba(255, 255, 255, 0.8)',
+                                ? '0 2px 8px rgba(46, 196, 182, 0.15), inset 0 1px 2px rgba(var(--surface-rgb), 0.8)'
+                                : '0 2px 8px rgba(29, 112, 162, 0.15), inset 0 1px 2px rgba(var(--surface-rgb), 0.8)',
                             }}
                           >
                             {blast.triggerSource === 'System'
                               ? <Cpu className="text-[#2EC4B6]" size={16} strokeWidth={2.5} />
-                              : <User className="text-[#1D70A2]" size={16} strokeWidth={2.5} />
+                              : <User className="text-link" size={16} strokeWidth={2.5} />
                             }
                           </div>
                           <div className="flex flex-col">
-                            <span className="text-[#0B3C5D] text-xs" style={{ fontWeight: 600 }}>{blast.triggerSource}</span>
-                            <span className="text-[#0B3C5D]/60 text-xs">{blast.triggeredBy}</span>
+                            <span className="text-ink text-xs" style={{ fontWeight: 600 }}>{blast.triggerSource}</span>
+                            <span className="text-ink/60 text-xs">{blast.triggeredBy}</span>
                           </div>
                         </div>
                       </td>
                       <td className="px-8 py-4">
                         <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full" style={statusStyle}>
-                          <div className="w-2 h-2 rounded-full" style={{ background: statusStyle.color, animation: blast.status === 'Pending' ? 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none' }} />
+                          <div className="w-2 h-2 rounded-full" style={{ background: statusStyle.color, animation: blast.status === 'Pending' || blast.status === 'Sending' ? 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none' }} />
                           <span className="text-xs" style={{ fontWeight: 600 }}>{blast.status}</span>
                         </div>
                       </td>
                       <td className="px-8 py-4">
-                        <span className="text-[#0B3C5D]/70 text-xs">{blast.location}</span>
+                        <span className="text-ink/70 text-xs">{blast.location}</span>
+                      </td>
+                      <td className="px-8 py-4 text-center">
+                        {blast.status === 'Failed' && (
+                          <button
+                            type="button"
+                            aria-label={`Delete failed blast ${blast.displayId}`}
+                            title="Delete this failed blast"
+                            onClick={(e) => { e.stopPropagation(); setDeleteError(''); setDeleteTarget(blast); }}
+                            className="p-2 rounded-xl"
+                            style={{ background: 'rgba(255, 107, 53, 0.1)' }}
+                          >
+                            <Trash2 className="text-[#FF6B35]" size={16} strokeWidth={2.5} />
+                          </button>
+                        )}
                       </td>
                     </motion.tr>
                   );
@@ -356,23 +485,34 @@ export function SMSBlastTable() {
           </div>
 
           {/* Footer Stats */}
-          <div className="px-8 py-5 border-t border-[#0B3C5D]/10 bg-white/40">
+          <div className="px-8 py-5 border-t border-ink/10 bg-surface/40">
             <div className="flex items-center justify-between">
-              <span className="text-[#0B3C5D]/60 text-sm">
-                Showing {filteredBlasts.length} of {blastData.length} blast logs
+              <span className="text-ink/60 text-sm">
+                Showing {filteredBlasts.length} of {blasts.length} blast logs
               </span>
+              {failedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => { setDeleteError(''); setDeleteTarget('all'); }}
+                  className="flex items-center gap-2 px-4 py-1.5 rounded-full text-xs"
+                  style={{ background: 'rgba(255, 107, 53, 0.1)', border: '1px solid rgba(255, 107, 53, 0.3)', color: '#FF6B35', fontWeight: 700 }}
+                >
+                  <Trash2 size={14} strokeWidth={2.5} />
+                  Delete {failedCount} failed
+                </button>
+              )}
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-full" style={{ background: 'rgba(220, 38, 38, 0.1)' }}>
                   <div className="w-2 h-2 rounded-full bg-[#DC2626]" />
-                  <span className="text-xs text-[#DC2626]" style={{ fontWeight: 600 }}>{blastData.filter(b => b.level === 'CRITICAL').length} Critical</span>
+                  <span className="text-xs text-[#DC2626]" style={{ fontWeight: 600 }}>{blasts.filter(b => b.level === 'CRITICAL').length} Critical</span>
                 </div>
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-full" style={{ background: 'rgba(255, 107, 53, 0.1)' }}>
                   <div className="w-2 h-2 rounded-full bg-[#FF6B35]" />
-                  <span className="text-xs text-[#FF6B35]" style={{ fontWeight: 600 }}>{blastData.filter(b => b.level === 'WARNING').length} Warning</span>
+                  <span className="text-xs text-[#FF6B35]" style={{ fontWeight: 600 }}>{blasts.filter(b => b.level === 'WARNING').length} Warning</span>
                 </div>
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-full" style={{ background: 'rgba(46, 196, 182, 0.1)' }}>
                   <div className="w-2 h-2 rounded-full bg-[#2EC4B6]" />
-                  <span className="text-xs text-[#2EC4B6]" style={{ fontWeight: 600 }}>{blastData.filter(b => b.level === 'INFO').length} Info</span>
+                  <span className="text-xs text-[#2EC4B6]" style={{ fontWeight: 600 }}>{blasts.filter(b => b.level === 'INFO').length} Info</span>
                 </div>
               </div>
             </div>
@@ -380,8 +520,8 @@ export function SMSBlastTable() {
         </div>
 
         <style>{`
-          .hover-row { cursor: pointer; }
-          .hover-row:hover {
+          .sms-row { cursor: pointer; }
+          .sms-row:hover {
             background: linear-gradient(90deg, rgba(29, 112, 162, 0.04) 0%, rgba(29, 112, 162, 0.08) 50%, rgba(29, 112, 162, 0.04) 100%);
             box-shadow: inset 0 1px 2px rgba(29, 112, 162, 0.15);
           }
@@ -393,6 +533,77 @@ export function SMSBlastTable() {
           }
         `}</style>
       </motion.div>
+
+      {/* ===================== DELETE FAILED MODAL ===================== */}
+      <AnimatePresence>
+        {deleteTarget && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={closeDelete}
+              className="fixed inset-0 z-40"
+              style={{ background: 'rgba(11, 60, 93, 0.5)', backdropFilter: 'blur(4px)' }}
+            />
+            <motion.div
+              role="dialog" aria-modal="true" aria-label="Delete failed blasts"
+              initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              transition={{ duration: 0.2 }}
+              className="fixed inset-0 z-50 flex items-center justify-center p-4"
+              style={{ pointerEvents: 'none' }}
+            >
+              <div
+                className="w-full max-w-sm p-8 relative"
+                style={{
+                  background: 'rgba(var(--surface-rgb), 0.97)',
+                  borderRadius: '28px',
+                  boxShadow: '0 20px 60px rgba(var(--shadow-rgb), 0.25)',
+                  border: '1px solid rgba(255, 107, 53, 0.25)',
+                  pointerEvents: 'all',
+                }}
+              >
+                <div className="flex justify-center mb-4">
+                  <div className="p-4 rounded-2xl" style={{ background: 'rgba(255, 107, 53, 0.1)' }}>
+                    <AlertTriangle className="text-[#FF6B35]" size={32} strokeWidth={2} />
+                  </div>
+                </div>
+                <h3 className="text-ink text-xl text-center mb-2" style={{ fontWeight: 700 }}>
+                  {deleteTarget === 'all' ? 'Delete All Failed Blasts' : 'Delete Failed Blast'}
+                </h3>
+                <p className="text-ink/60 text-sm text-center mb-2">
+                  {deleteTarget === 'all'
+                    ? `Delete all ${failedCount} failed blast${failedCount === 1 ? '' : 's'} from the log?`
+                    : `Delete failed blast ${deleteTarget.displayId} from the log?`}
+                </p>
+                <p className="text-ink/45 text-xs text-center mb-6">
+                  Nothing was delivered for these. Sent and pending blasts are never deleted, and each deletion is recorded in the audit log.
+                </p>
+                {deleteError && (
+                  <p className="text-center mb-3" style={{ color: '#ef4444', fontSize: '13px', fontWeight: 500 }}>⚠ {deleteError}</p>
+                )}
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={closeDelete}
+                    className="flex-1 py-3 rounded-2xl text-sm text-ink"
+                    style={{ background: 'rgba(var(--ink-rgb), 0.05)', border: '1px solid rgba(var(--ink-rgb), 0.1)', fontWeight: 600 }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDelete}
+                    disabled={deleting}
+                    className="flex-1 py-3 rounded-2xl text-sm text-white disabled:opacity-60"
+                    style={{ background: 'linear-gradient(135deg, #FF6B35 0%, #FF8C42 100%)', boxShadow: '0 8px 24px rgba(255, 107, 53, 0.4)', fontWeight: 600 }}
+                  >
+                    {deleting ? 'Deleting...' : 'Delete'}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* ===================== VIEW DETAILS MODAL ===================== */}
       <AnimatePresence>
@@ -408,7 +619,7 @@ export function SMSBlastTable() {
                 exit={{ opacity: 0 }}
                 onClick={() => setShowDetailsModal(false)}
                 className="fixed inset-0 z-40"
-                style={{ background: 'rgba(11, 60, 93, 0.5)', backdropFilter: 'blur(4px)' }}
+                style={{ background: 'rgba(var(--ink-rgb), 0.5)', backdropFilter: 'blur(4px)' }}
               />
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -421,10 +632,9 @@ export function SMSBlastTable() {
                 <div
                   className="w-full max-w-lg p-8 relative"
                   style={{
-                    background: 'rgba(255, 255, 255, 0.95)',
-                    backdropFilter: 'blur(20px)',
+                    background: 'rgba(var(--surface-rgb), 0.95)',
                     borderRadius: '28px',
-                    boxShadow: '0 20px 60px rgba(11, 60, 93, 0.2)',
+                    boxShadow: '0 20px 60px rgba(var(--shadow-rgb), 0.2)',
                     border: `1px solid ${levelStyle.color}33`,
                     pointerEvents: 'all',
                   }}
@@ -436,8 +646,8 @@ export function SMSBlastTable() {
                         <LevelIcon style={{ color: levelStyle.color }} size={20} strokeWidth={2.5} />
                       </div>
                       <div>
-                        <h3 className="text-[#0B3C5D] text-xl" style={{ fontWeight: 700 }}>Blast Details</h3>
-                        <p className="text-[#0B3C5D]/50 text-xs mt-0.5" style={{ fontFamily: 'monospace' }}>{selectedBlast.id}</p>
+                        <h3 className="text-ink text-xl" style={{ fontWeight: 700 }}>Blast Details</h3>
+                        <p className="text-ink/50 text-xs mt-0.5" style={{ fontFamily: 'monospace' }}>{selectedBlast.displayId}</p>
                       </div>
                     </div>
                     <motion.button
@@ -445,9 +655,9 @@ export function SMSBlastTable() {
                       whileTap={{ scale: 0.95 }}
                       onClick={() => setShowDetailsModal(false)}
                       className="p-2 rounded-xl"
-                      style={{ background: 'rgba(11, 60, 93, 0.05)' }}
+                      style={{ background: 'rgba(var(--ink-rgb), 0.05)' }}
                     >
-                      <X className="text-[#0B3C5D]/60" size={20} />
+                      <X className="text-ink/60" size={20} />
                     </motion.button>
                   </div>
 
@@ -459,65 +669,71 @@ export function SMSBlastTable() {
                     <p className="text-xs mb-2" style={{ color: levelStyle.color, fontWeight: 700 }}>
                       FULL MESSAGE
                     </p>
-                    <p className="text-[#0B3C5D] text-sm leading-relaxed">
+                    <p className="text-ink text-sm leading-relaxed">
                       {selectedBlast.message}
                     </p>
                   </div>
+
+                  {selectedBlast.errorMessage && (
+                    <div className="p-3 rounded-2xl mb-5 text-xs" style={{ background: 'rgba(220, 38, 38, 0.08)', border: '1px solid rgba(220, 38, 38, 0.25)', color: '#EF4444', fontWeight: 600 }}>
+                      {selectedBlast.errorMessage}
+                    </div>
+                  )}
 
                   {/* Details Grid */}
                   <div className="grid grid-cols-2 gap-3">
 
                     {/* Timestamp */}
-                    <div className="p-3 rounded-2xl" style={{ background: 'rgba(11, 60, 93, 0.03)', border: '1px solid rgba(11, 60, 93, 0.08)' }}>
+                    <div className="p-3 rounded-2xl" style={{ background: 'rgba(var(--ink-rgb), 0.03)', border: '1px solid rgba(var(--ink-rgb), 0.08)' }}>
                       <div className="flex items-center gap-2 mb-1">
-                        <Clock size={14} className="text-[#0B3C5D]/40" />
-                        <span className="text-[#0B3C5D]/50 text-xs" style={{ fontWeight: 600 }}>TIMESTAMP</span>
+                        <Clock size={14} className="text-ink/40" />
+                        <span className="text-ink/50 text-xs" style={{ fontWeight: 600 }}>TIMESTAMP</span>
                       </div>
-                      <p className="text-[#0B3C5D] text-xs" style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+                      <p className="text-ink text-xs" style={{ fontFamily: 'monospace', fontWeight: 600 }}>
                         {selectedBlast.timestamp}
                       </p>
                     </div>
 
                     {/* Recipients */}
-                    <div className="p-3 rounded-2xl" style={{ background: 'rgba(11, 60, 93, 0.03)', border: '1px solid rgba(11, 60, 93, 0.08)' }}>
+                    <div className="p-3 rounded-2xl" style={{ background: 'rgba(var(--ink-rgb), 0.03)', border: '1px solid rgba(var(--ink-rgb), 0.08)' }}>
                       <div className="flex items-center gap-2 mb-1">
-                        <Users size={14} className="text-[#0B3C5D]/40" />
-                        <span className="text-[#0B3C5D]/50 text-xs" style={{ fontWeight: 600 }}>RECIPIENTS</span>
+                        <Users size={14} className="text-ink/40" />
+                        <span className="text-ink/50 text-xs" style={{ fontWeight: 600 }}>RECIPIENTS</span>
                       </div>
-                      <p className="text-[#0B3C5D] text-sm" style={{ fontWeight: 700 }}>
-                        {selectedBlast.recipients.toLocaleString()} residents
+                      <p className="text-ink text-sm" style={{ fontWeight: 700 }}>
+                        {selectedBlast.status === 'Pending' || selectedBlast.status === 'Sending' ? 'Not sent yet' : `${selectedBlast.recipients.toLocaleString()} residents`}
                       </p>
                     </div>
 
                     {/* Location */}
-                    <div className="p-3 rounded-2xl" style={{ background: 'rgba(11, 60, 93, 0.03)', border: '1px solid rgba(11, 60, 93, 0.08)' }}>
+                    <div className="p-3 rounded-2xl" style={{ background: 'rgba(var(--ink-rgb), 0.03)', border: '1px solid rgba(var(--ink-rgb), 0.08)' }}>
                       <div className="flex items-center gap-2 mb-1">
-                        <MapPin size={14} className="text-[#0B3C5D]/40" />
-                        <span className="text-[#0B3C5D]/50 text-xs" style={{ fontWeight: 600 }}>LOCATION</span>
+                        <MapPin size={14} className="text-ink/40" />
+                        <span className="text-ink/50 text-xs" style={{ fontWeight: 600 }}>LOCATION</span>
                       </div>
-                      <p className="text-[#0B3C5D] text-xs" style={{ fontWeight: 600 }}>
+                      <p className="text-ink text-xs" style={{ fontWeight: 600 }}>
                         {selectedBlast.location}
                       </p>
                     </div>
 
                     {/* Triggered By */}
-                    <div className="p-3 rounded-2xl" style={{ background: 'rgba(11, 60, 93, 0.03)', border: '1px solid rgba(11, 60, 93, 0.08)' }}>
+                    <div className="p-3 rounded-2xl" style={{ background: 'rgba(var(--ink-rgb), 0.03)', border: '1px solid rgba(var(--ink-rgb), 0.08)' }}>
                       <div className="flex items-center gap-2 mb-1">
                         {selectedBlast.triggerSource === 'System'
-                          ? <Cpu size={14} className="text-[#0B3C5D]/40" />
-                          : <User size={14} className="text-[#0B3C5D]/40" />
+                          ? <Cpu size={14} className="text-ink/40" />
+                          : <User size={14} className="text-ink/40" />
                         }
-                        <span className="text-[#0B3C5D]/50 text-xs" style={{ fontWeight: 600 }}>TRIGGERED BY</span>
+                        <span className="text-ink/50 text-xs" style={{ fontWeight: 600 }}>TRIGGERED BY</span>
                       </div>
-                      <p className="text-[#0B3C5D] text-xs" style={{ fontWeight: 600 }}>
+                      <p className="text-ink text-xs" style={{ fontWeight: 600 }}>
                         {selectedBlast.triggeredBy}
                       </p>
-                      <p className="text-[#0B3C5D]/50 text-xs">{selectedBlast.triggerSource}</p>
+                      <p className="text-ink/50 text-xs">{selectedBlast.triggerSource}</p>
                     </div>
 
                     {/* Level */}
-                    <div className="p-3 rounded-2xl" style={{ background: 'rgba(11, 60, 93, 0.03)', border: '1px solid rgba(11, 60, 93, 0.08)' }}>
-                      <span className="text-[#0B3C5D]/50 text-xs block mb-2" style={{ fontWeight: 600 }}>ALERT LEVEL</span>
+                    <div className="p-3 rounded-2xl" style={{ background: 'rgba(var(--ink-rgb), 0.03)', border: '1px solid rgba(var(--ink-rgb), 0.08)' }}>
+                      <span className="text-ink/50 text-xs block mb-2" style={{ fontWeight: 600 }}>ALERT LEVEL</span>
                       <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full" style={{ ...levelStyle, boxShadow: levelStyle.glow, fontWeight: 700 }}>
                         <LevelIcon size={12} strokeWidth={3} />
                         <span className="text-xs">{selectedBlast.level}</span>
@@ -525,8 +741,8 @@ export function SMSBlastTable() {
                     </div>
 
                     {/* Status */}
-                    <div className="p-3 rounded-2xl" style={{ background: 'rgba(11, 60, 93, 0.03)', border: '1px solid rgba(11, 60, 93, 0.08)' }}>
-                      <span className="text-[#0B3C5D]/50 text-xs block mb-2" style={{ fontWeight: 600 }}>DELIVERY STATUS</span>
+                    <div className="p-3 rounded-2xl" style={{ background: 'rgba(var(--ink-rgb), 0.03)', border: '1px solid rgba(var(--ink-rgb), 0.08)' }}>
+                      <span className="text-ink/50 text-xs block mb-2" style={{ fontWeight: 600 }}>DELIVERY STATUS</span>
                       <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full" style={statusStyle}>
                         <div className="w-2 h-2 rounded-full" style={{ background: statusStyle.color }} />
                         <span className="text-xs" style={{ fontWeight: 600 }}>{selectedBlast.status}</span>
@@ -540,10 +756,10 @@ export function SMSBlastTable() {
                     onClick={() => setShowDetailsModal(false)}
                     className="w-full mt-6 py-3 rounded-2xl text-sm transition-all"
                     style={{
-                      background: 'rgba(11, 60, 93, 0.05)',
-                      color: '#0B3C5D',
+                      background: 'rgba(var(--ink-rgb), 0.05)',
+                      color: 'rgb(var(--ink-rgb))',
                       fontWeight: 600,
-                      border: '1px solid rgba(11, 60, 93, 0.1)',
+                      border: '1px solid rgba(var(--ink-rgb), 0.1)',
                     }}
                   >
                     Close
@@ -565,7 +781,7 @@ export function SMSBlastTable() {
               exit={{ opacity: 0 }}
               onClick={() => setShowComposeModal(false)}
               className="fixed inset-0 z-40"
-              style={{ background: 'rgba(11, 60, 93, 0.5)', backdropFilter: 'blur(4px)' }}
+              style={{ background: 'rgba(var(--ink-rgb), 0.5)', backdropFilter: 'blur(4px)' }}
             />
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -578,28 +794,27 @@ export function SMSBlastTable() {
               <div
                 className="w-full max-w-lg p-8 relative"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.95)',
-                  backdropFilter: 'blur(20px)',
+                  background: 'rgba(var(--surface-rgb), 0.95)',
                   borderRadius: '28px',
-                  boxShadow: '0 20px 60px rgba(11, 60, 93, 0.2)',
+                  boxShadow: '0 20px 60px rgba(var(--shadow-rgb), 0.2)',
                   border: '1px solid rgba(46, 196, 182, 0.2)',
                   pointerEvents: 'all',
                 }}
               >
                 <div className="flex items-center justify-between mb-6">
                   <div>
-                    <h3 className="text-[#0B3C5D] text-xl" style={{ fontWeight: 700 }}>Compose New Blast</h3>
-                    <p className="text-[#0B3C5D]/50 text-sm mt-0.5">Send a manual SMS alert to all registered residents</p>
+                    <h3 className="text-ink text-xl" style={{ fontWeight: 700 }}>Compose New Blast</h3>
+                    <p className="text-ink/50 text-sm mt-0.5">Send a manual SMS alert to registered residents</p>
                   </div>
-                  <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} onClick={() => setShowComposeModal(false)} className="p-2 rounded-xl" style={{ background: 'rgba(11, 60, 93, 0.05)' }}>
-                    <X className="text-[#0B3C5D]/60" size={20} />
+                  <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} onClick={() => setShowComposeModal(false)} className="p-2 rounded-xl" style={{ background: 'rgba(var(--ink-rgb), 0.05)' }}>
+                    <X className="text-ink/60" size={20} />
                   </motion.button>
                 </div>
 
                 <div className="space-y-4">
                   {/* Alert Level */}
                   <div>
-                    <label className="block text-[#0B3C5D] text-sm mb-1.5" style={{ fontWeight: 600 }}>Alert Level</label>
+                    <label className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Alert Level</label>
                     <div className="flex gap-3">
                       {(['INFO', 'WARNING', 'CRITICAL'] as const).map((level) => {
                         const style = getLevelStyle(level);
@@ -608,12 +823,14 @@ export function SMSBlastTable() {
                         return (
                           <button
                             key={level}
+                            type="button"
+                            aria-pressed={isSelected}
                             onClick={() => setNewBlast({ ...newBlast, level })}
                             className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs transition-all"
                             style={{
-                              background: isSelected ? style.background : 'rgba(11, 60, 93, 0.03)',
-                              border: isSelected ? style.border : '1px solid rgba(11, 60, 93, 0.1)',
-                              color: isSelected ? style.color : '#0B3C5D',
+                              background: isSelected ? style.background : 'rgba(var(--ink-rgb), 0.03)',
+                              border: isSelected ? style.border : '1px solid rgba(var(--ink-rgb), 0.1)',
+                              color: isSelected ? style.color : 'rgb(var(--ink-rgb))',
                               fontWeight: 700,
                               boxShadow: isSelected ? style.glow : 'none',
                             }}
@@ -628,68 +845,76 @@ export function SMSBlastTable() {
 
                   {/* Location */}
                   <div>
-                    <label className="block text-[#0B3C5D] text-sm mb-1.5" style={{ fontWeight: 600 }}>Target Location</label>
-                    <select value={newBlast.location} onChange={(e) => setNewBlast({ ...newBlast, location: e.target.value })} style={inputStyle}>
+                    <label htmlFor="blast-location" className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Target Location</label>
+                    <select id="blast-location" value={newBlast.location} onChange={(e) => setNewBlast({ ...newBlast, location: e.target.value })} style={inputStyle}>
                       <option value="">Select location...</option>
-                      <option value="All Districts">All Districts</option>
-                      <option value="District A - River Bridge">District A - River Bridge</option>
-                      <option value="District B - Central Park">District B - Central Park</option>
-                      <option value="District C - Dam Site">District C - Dam Site</option>
-                      <option value="District D - Industrial Zone">District D - Industrial Zone</option>
-                      <option value="Barangay 659">Barangay 659</option>
+                      {SMS_AREAS.map((area) => (
+                        <option key={area} value={area}>{area}</option>
+                      ))}
                     </select>
+                    {newBlast.location && (
+                      <p className="text-xs mt-1.5" style={{ fontWeight: 600, color: recipientCount === 0 ? '#EF4444' : 'rgba(var(--ink-rgb), 0.55)' }}>
+                        {recipientCount === null
+                          ? 'Counting residents...'
+                          : recipientCount === 0
+                          ? 'No active, verified residents here. Add them on the Residents page.'
+                          : `${recipientCount.toLocaleString()} resident${recipientCount === 1 ? '' : 's'} will receive this message.`}
+                      </p>
+                    )}
                   </div>
 
                   {/* Message */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <label className="block text-[#0B3C5D] text-sm" style={{ fontWeight: 600 }}>Message</label>
-                      <span className="text-xs" style={{ color: newBlast.message.length > MAX_CHARS ? '#DC2626' : '#0B3C5D', opacity: 0.5, fontWeight: 600 }}>
+                      <label htmlFor="blast-message" className="block text-ink text-sm" style={{ fontWeight: 600 }}>Message</label>
+                      <span className="text-xs" style={{ color: newBlast.message.length > MAX_CHARS ? '#DC2626' : 'rgb(var(--ink-rgb))', opacity: 0.5, fontWeight: 600 }}>
                         {newBlast.message.length}/{MAX_CHARS}
                       </span>
                     </div>
                     <textarea
+                      id="blast-message"
+                      maxLength={HARD_LIMIT}
                       placeholder="Type your emergency message here..."
                       value={newBlast.message}
                       onChange={(e) => setNewBlast({ ...newBlast, message: e.target.value })}
                       rows={4}
                       style={{ ...inputStyle, resize: 'none', lineHeight: '1.5' }}
                     />
-                    <p className="text-[#0B3C5D]/40 text-xs mt-1">Standard SMS is 160 characters. Longer messages may be split into multiple SMS.</p>
+                    <p className="text-ink/40 text-xs mt-1">Standard SMS is 160 characters. Longer messages are split into multiple SMS (max {HARD_LIMIT}).</p>
                   </div>
 
                   {/* Preview */}
                   {newBlast.message && (
-                    <div className="p-4 rounded-2xl" style={{ background: 'rgba(11, 60, 93, 0.03)', border: '1px solid rgba(11, 60, 93, 0.08)' }}>
-                      <p className="text-[#0B3C5D]/50 text-xs mb-1" style={{ fontWeight: 600 }}>SMS PREVIEW</p>
-                      <p className="text-[#0B3C5D] text-sm">[FloodSense] {newBlast.message}</p>
+                    <div className="p-4 rounded-2xl" style={{ background: 'rgba(var(--ink-rgb), 0.03)', border: '1px solid rgba(var(--ink-rgb), 0.08)' }}>
+                      <p className="text-ink/50 text-xs mb-1" style={{ fontWeight: 600 }}>SMS PREVIEW</p>
+                      <p className="text-ink text-sm">[FloodSense] {newBlast.message}</p>
                     </div>
                   )}
                 </div>
 
+                {composeError && (
+                  <p style={{ color: '#ef4444', fontSize: '13px', marginTop: '12px', fontWeight: 500 }}>⚠ {composeError}</p>
+                )}
+
                 <div className="flex gap-3 mt-6">
                   <button
+                    type="button"
                     onClick={() => setShowComposeModal(false)}
                     className="flex-1 py-3 rounded-2xl text-sm transition-all"
-                    style={{ background: 'rgba(11, 60, 93, 0.05)', color: '#0B3C5D', fontWeight: 600, border: '1px solid rgba(11, 60, 93, 0.1)' }}
+                    style={{ background: 'rgba(var(--ink-rgb), 0.05)', color: 'rgb(var(--ink-rgb))', fontWeight: 600, border: '1px solid rgba(var(--ink-rgb), 0.1)' }}
                   >
                     Cancel
                   </button>
                   <motion.button
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
-                    onClick={() => {
-                      // TODO: backend developer connects this to Semaphore API
-                      // triggeredBy: currentUser.name will be passed to the backend
-                      console.log('Blast triggered by:', currentUser.name || 'Admin');
-                      setShowComposeModal(false);
-                      setNewBlast({ level: 'INFO', location: '', message: '' });
-                    }}
-                    className="flex-1 py-3 rounded-2xl text-sm text-white flex items-center justify-center gap-2"
+                    onClick={handleSendBlast}
+                    disabled={sending || recipientCount === 0}
+                    className="flex-1 py-3 rounded-2xl text-sm text-white flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                     style={{ background: 'linear-gradient(135deg, #2EC4B6 0%, #1fa299 100%)', boxShadow: '0 8px 24px rgba(46, 196, 182, 0.4)', fontWeight: 600 }}
                   >
                     <Send size={16} strokeWidth={2.5} />
-                    Send Blast
+                    {sending ? 'Sending...' : recipientCount ? `Send to ${recipientCount.toLocaleString()}` : 'Send Blast'}
                   </motion.button>
                 </div>
               </div>

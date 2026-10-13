@@ -1,19 +1,52 @@
 import { motion, AnimatePresence } from 'motion/react';
 import { AlertTriangle, Circle, X } from 'lucide-react';
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { ALL_RESIDENTS, getGatewayConfigured, sendBlast, type BlastOutcome } from '@/lib/sms';
+import { useEscape } from '@/app/hooks/useEscape';
+
+const EVACUATION_MESSAGE =
+  'CRITICAL ALERT: Manual evacuation alarm triggered by FloodSense Command Center. Evacuate to the nearest evacuation center immediately.';
 
 export function QuickActionsPanel() {
   const { role } = useAuth();
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [triggering, setTriggering] = useState(false);
+  const [triggerError, setTriggerError] = useState('');
+  const [outcome, setOutcome] = useState<BlastOutcome | null>(null);
+  const [gateway, setGateway] = useState<boolean | null>(null);
+  const successTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  function handleConfirm() {
-    // TODO: backend developer connects this to Semaphore API
+  useEffect(() => () => clearTimeout(successTimer.current), []);
+
+  // Is the SMS gateway set up? (only staff can send, so only they check)
+  useEffect(() => {
+    if (role === 'admin' || role === 'operator') getGatewayConfigured().then(setGateway);
+  }, [role]);
+
+  const closeConfirm = useCallback(() => {
     setShowConfirmModal(false);
-    setShowSuccessModal(true);
-    // Auto-close success after 3 seconds
-    setTimeout(() => setShowSuccessModal(false), 3000);
+    setTriggerError('');
+  }, []);
+  useEscape(showConfirmModal, closeConfirm);
+
+  // Saves the alarm as a CRITICAL SMS blast and sends it to every active, verified resident.
+  async function handleConfirm() {
+    setTriggering(true);
+    setTriggerError('');
+    try {
+      const result = await sendBlast({ message: EVACUATION_MESSAGE, level: 'CRITICAL', location: ALL_RESIDENTS });
+      setOutcome(result);
+      setShowConfirmModal(false);
+      setShowSuccessModal(true);
+      // Leave failures on screen longer so they are not missed
+      successTimer.current = setTimeout(() => setShowSuccessModal(false), result.kind === 'sent' ? 6000 : 15000);
+    } catch (err) {
+      setTriggerError((err as Error).message);
+    } finally {
+      setTriggering(false);
+    }
   }
 
   return (
@@ -21,18 +54,18 @@ export function QuickActionsPanel() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, delay: 0.3 }}
-        className="relative bg-white/80 backdrop-blur-xl p-6"
+        transition={{ duration: 0.25 }}
+        className="relative bg-surface/80 p-6"
         style={{
           borderRadius: '28px',
-          boxShadow: '0 8px 32px rgba(11, 60, 93, 0.08)',
-          border: '1px solid rgba(255, 255, 255, 0.6)',
+          boxShadow: '0 8px 32px rgba(var(--shadow-rgb), 0.08)',
+          border: '1px solid rgba(var(--surface-rgb), 0.6)',
         }}
       >
-        <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent pointer-events-none" style={{ borderRadius: '28px' }} />
+        <div className="absolute inset-0 bg-gradient-to-br from-surface/40 to-transparent pointer-events-none" style={{ borderRadius: '28px' }} />
 
         <div className="relative z-10">
-          <h3 className="text-[#0B3C5D] text-lg mb-4" style={{ fontWeight: 700 }}>
+          <h3 className="text-ink text-lg mb-4" style={{ fontWeight: 700 }}>
             Quick Actions
           </h3>
 
@@ -72,18 +105,17 @@ export function QuickActionsPanel() {
               </motion.button>
 
               {/* This action will */}
-              <div className="mb-6 p-4 rounded-2xl bg-[#0B3C5D]/5 border border-[#0B3C5D]/10">
-                <p className="text-[#0B3C5D] text-sm mb-2" style={{ fontWeight: 600 }}>
+              <div className="mb-6 p-4 rounded-2xl bg-ink/5 border border-ink/10">
+                <p className="text-ink text-sm mb-2" style={{ fontWeight: 600 }}>
                   This action will:
                 </p>
                 <ul className="space-y-1.5">
                   {[
-                    'Send SMS alerts to all registered residents',
-                    'Activate emergency sirens',
-                    'Notify emergency response teams',
+                    'Send a CRITICAL evacuation SMS to all active, verified residents',
+                    'Record the alert in the SMS Blast Logs',
                   ].map((item) => (
-                    <li key={item} className="flex items-start gap-2 text-[#0B3C5D]/70 text-sm">
-                      <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-[#0B3C5D]/40 flex-shrink-0" />
+                    <li key={item} className="flex items-start gap-2 text-ink/70 text-sm">
+                      <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-ink/40 flex-shrink-0" />
                       {item}
                     </li>
                   ))}
@@ -94,35 +126,40 @@ export function QuickActionsPanel() {
 
           {/* ✅ Viewer sees this instead */}
           {role === 'viewer' && (
-            <div className="mb-6 p-4 rounded-2xl bg-[#0B3C5D]/5 border border-[#0B3C5D]/10 text-center">
-              <p className="text-[#0B3C5D]/60 text-sm">
+            <div className="mb-6 p-4 rounded-2xl bg-ink/5 border border-ink/10 text-center">
+              <p className="text-ink/60 text-sm">
                 You don't have permission to trigger alarms.
               </p>
             </div>
           )}
 
           {/* System Alerts — visible to everyone */}
-          <h3 className="text-[#0B3C5D] text-lg mb-3" style={{ fontWeight: 700 }}>
+          <h3 className="text-ink text-lg mb-3" style={{ fontWeight: 700 }}>
             System Alerts
           </h3>
           <div className="space-y-3">
             <div>
               <div className="flex items-center gap-2">
-                <Circle className="text-green-500 fill-green-500" size={12} />
-                <span className="text-[#0B3C5D] text-sm" style={{ fontWeight: 600 }}>
-                  All sensors operational
+                <Circle className="text-gray-400 fill-gray-400" size={12} />
+                <span className="text-ink text-sm" style={{ fontWeight: 600 }}>
+                  Sensor feed: not connected
                 </span>
               </div>
-              <p className="text-[#0B3C5D]/50 text-xs ml-5">Last check: 2 min ago</p>
+              <p className="text-ink/50 text-xs ml-5">Live sensor status will appear here</p>
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <Circle className="text-green-500 fill-green-500" size={12} />
-                <span className="text-[#0B3C5D] text-sm" style={{ fontWeight: 600 }}>
-                  Communication network: Active
+                <Circle
+                  className={gateway ? 'text-green-500 fill-green-500' : gateway === false ? 'text-[#FFB84D] fill-[#FFB84D]' : 'text-gray-400 fill-gray-400'}
+                  size={12}
+                />
+                <span className="text-ink text-sm" style={{ fontWeight: 600 }}>
+                  {gateway ? 'SMS gateway: ready' : gateway === false ? 'SMS gateway: not set up' : 'SMS gateway: checking...'}
                 </span>
               </div>
-              <p className="text-[#0B3C5D]/50 text-xs ml-5">Signal strength: Excellent</p>
+              <p className="text-ink/50 text-xs ml-5">
+                {gateway === false ? 'Blasts are saved as Pending until the Semaphore key is added' : 'Alerts are sent through Semaphore'}
+              </p>
             </div>
           </div>
         </div>
@@ -136,9 +173,9 @@ export function QuickActionsPanel() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setShowConfirmModal(false)}
+              onClick={closeConfirm}
               className="fixed inset-0 z-40"
-              style={{ background: 'rgba(11, 60, 93, 0.5)', backdropFilter: 'blur(4px)' }}
+              style={{ background: 'rgba(var(--ink-rgb), 0.5)', backdropFilter: 'blur(4px)' }}
             />
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -151,23 +188,23 @@ export function QuickActionsPanel() {
               <div
                 className="w-full max-w-sm p-8 relative"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.95)',
-                  backdropFilter: 'blur(20px)',
+                  background: 'rgba(var(--surface-rgb), 0.95)',
                   borderRadius: '28px',
-                  boxShadow: '0 20px 60px rgba(11, 60, 93, 0.2)',
+                  boxShadow: '0 20px 60px rgba(var(--shadow-rgb), 0.2)',
                   border: '1px solid rgba(255, 107, 53, 0.3)',
                   pointerEvents: 'all',
                 }}
               >
                 {/* Close button */}
                 <motion.button
+                  aria-label="Close"
                   whileHover={{ scale: 1.1 }}
                   whileTap={{ scale: 0.95 }}
-                  onClick={() => setShowConfirmModal(false)}
+                  onClick={closeConfirm}
                   className="absolute top-4 right-4 p-2 rounded-xl"
-                  style={{ background: 'rgba(11, 60, 93, 0.05)' }}
+                  style={{ background: 'rgba(var(--ink-rgb), 0.05)' }}
                 >
-                  <X className="text-[#0B3C5D]/60" size={18} />
+                  <X className="text-ink/60" size={18} />
                 </motion.button>
 
                 {/* Warning Icon */}
@@ -183,11 +220,11 @@ export function QuickActionsPanel() {
                 </div>
 
                 {/* Text */}
-                <h3 className="text-[#0B3C5D] text-xl text-center mb-2" style={{ fontWeight: 700 }}>
+                <h3 className="text-ink text-xl text-center mb-2" style={{ fontWeight: 700 }}>
                   Confirm Evacuation Alarm
                 </h3>
-                <p className="text-[#0B3C5D]/60 text-sm text-center mb-4">
-                  This will immediately send SMS alerts to all registered residents and activate emergency protocols.
+                <p className="text-ink/60 text-sm text-center mb-4">
+                  This immediately sends a CRITICAL evacuation SMS to every active, verified resident and records it in the SMS Blast Logs.
                 </p>
 
                 {/* Warning note */}
@@ -200,16 +237,21 @@ export function QuickActionsPanel() {
                   </p>
                 </div>
 
+                {triggerError && (
+                  <p className="text-center mb-4" style={{ color: '#ef4444', fontSize: '13px', fontWeight: 500 }}>⚠ {triggerError}</p>
+                )}
+
                 {/* Buttons */}
                 <div className="flex gap-3">
                   <button
-                    onClick={() => setShowConfirmModal(false)}
+                    type="button"
+                    onClick={closeConfirm}
                     className="flex-1 py-3 rounded-2xl text-sm transition-all"
                     style={{
-                      background: 'rgba(11, 60, 93, 0.05)',
-                      color: '#0B3C5D',
+                      background: 'rgba(var(--ink-rgb), 0.05)',
+                      color: 'rgb(var(--ink-rgb))',
                       fontWeight: 600,
-                      border: '1px solid rgba(11, 60, 93, 0.1)',
+                      border: '1px solid rgba(var(--ink-rgb), 0.1)',
                     }}
                   >
                     Cancel
@@ -218,7 +260,8 @@ export function QuickActionsPanel() {
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={handleConfirm}
-                    className="flex-1 py-3 rounded-2xl text-sm text-white flex items-center justify-center gap-2"
+                    disabled={triggering}
+                    className="flex-1 py-3 rounded-2xl text-sm text-white flex items-center justify-center gap-2 disabled:opacity-70"
                     style={{
                       background: 'linear-gradient(135deg, #FF6B35 0%, #FF8C42 100%)',
                       boxShadow: '0 8px 24px rgba(255, 107, 53, 0.4)',
@@ -226,7 +269,7 @@ export function QuickActionsPanel() {
                     }}
                   >
                     <AlertTriangle size={16} strokeWidth={2.5} />
-                    Confirm Alarm
+                    {triggering ? 'Recording...' : 'Confirm Alarm'}
                   </motion.button>
                 </div>
               </div>
@@ -243,8 +286,9 @@ export function QuickActionsPanel() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
+              onClick={() => setShowSuccessModal(false)}
               className="fixed inset-0 z-40"
-              style={{ background: 'rgba(11, 60, 93, 0.5)', backdropFilter: 'blur(4px)' }}
+              style={{ background: 'rgba(var(--ink-rgb), 0.5)', backdropFilter: 'blur(4px)' }}
             />
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -257,10 +301,9 @@ export function QuickActionsPanel() {
               <div
                 className="w-full max-w-sm p-8 relative text-center"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.95)',
-                  backdropFilter: 'blur(20px)',
+                  background: 'rgba(var(--surface-rgb), 0.95)',
                   borderRadius: '28px',
-                  boxShadow: '0 20px 60px rgba(11, 60, 93, 0.2)',
+                  boxShadow: '0 20px 60px rgba(var(--shadow-rgb), 0.2)',
                   border: '1px solid rgba(46, 196, 182, 0.3)',
                   pointerEvents: 'all',
                 }}
@@ -274,21 +317,32 @@ export function QuickActionsPanel() {
                 >
                   <div
                     className="p-4 rounded-2xl"
-                    style={{ background: 'rgba(46, 196, 182, 0.1)' }}
+                    style={{ background: outcome?.kind === 'sent' ? 'rgba(46, 196, 182, 0.1)' : outcome?.kind === 'failed' ? 'rgba(220, 38, 38, 0.1)' : 'rgba(255, 184, 77, 0.14)' }}
                   >
-                    <Circle className="text-[#2EC4B6] fill-[#2EC4B6]" size={36} />
+                    {outcome?.kind === 'sent'
+                      ? <Circle className="text-[#2EC4B6] fill-[#2EC4B6]" size={36} />
+                      : <AlertTriangle className={outcome?.kind === 'failed' ? 'text-[#DC2626]' : 'text-[#FFB84D]'} size={36} />}
                   </div>
                 </motion.div>
 
-                <h3 className="text-[#0B3C5D] text-xl mb-2" style={{ fontWeight: 700 }}>
-                  Alarm Triggered!
+                <h3 className="text-ink text-xl mb-2" style={{ fontWeight: 700 }}>
+                  {outcome?.kind === 'sent' ? 'Alarm Sent' : outcome?.kind === 'failed' ? 'Alarm Failed' : 'Alarm Not Sent'}
                 </h3>
-                <p className="text-[#0B3C5D]/60 text-sm mb-2">
-                  Emergency SMS alerts have been sent to all registered residents.
+                <p className="text-ink/60 text-sm mb-2">
+                  {outcome?.kind === 'sent'
+                    ? `Evacuation SMS sent to ${outcome.recipients.toLocaleString()} resident${outcome.recipients === 1 ? '' : 's'}.${outcome.warning ? ' ' + outcome.warning : ''}`
+                    : outcome?.kind === 'failed'
+                    ? outcome.error
+                    : `${outcome?.reason ?? ''} It was saved as Pending in the SMS Blast Logs.`}
                 </p>
-                <p className="text-[#0B3C5D]/40 text-xs">
-                  This dialog will close automatically...
-                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowSuccessModal(false)}
+                  className="mt-3 px-5 py-2 rounded-xl text-sm text-ink"
+                  style={{ background: 'rgba(var(--ink-rgb), 0.06)', border: '1px solid rgba(var(--ink-rgb), 0.12)', fontWeight: 600 }}
+                >
+                  Close
+                </button>
               </div>
             </motion.div>
           </>
