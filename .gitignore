@@ -1,7 +1,16 @@
 # Secrets
 .env
-.env.local
-.env.development
+.env.*
+/env
+# Firebase exports contain personal data (emails, phone numbers, OTP codes)
+floodsense-firestore-db.json
+
+# Build output
+dist/
+
+# Supabase CLI
+supabase/.temp/
+supabase/.branches/
 
 # Node.js
 node_modules/
