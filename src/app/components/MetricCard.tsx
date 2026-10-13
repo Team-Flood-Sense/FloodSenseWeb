@@ -8,6 +8,7 @@ interface MetricCardProps {
   unit?: string;
   showWaveAnimation?: boolean;
   showGlow?: boolean;
+  accent?: string;
 }
 
 export function MetricCard({ 
@@ -16,22 +17,24 @@ export function MetricCard({
   value, 
   unit, 
   showWaveAnimation = false,
-  showGlow = false 
+  showGlow = false,
+  accent = '#2EC4B6',
 }: MetricCardProps) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.6 }}
-      className="relative bg-white/80 backdrop-blur-xl p-6 overflow-hidden h-full"
+      transition={{ duration: 0.25 }}
+      className="card-lift relative bg-surface/80 p-6 overflow-hidden h-full"
       style={{
         borderRadius: '28px',
-        boxShadow: '0 8px 32px rgba(11, 60, 93, 0.08)',
-        border: '1px solid rgba(255, 255, 255, 0.6)',
+        boxShadow: '0 8px 32px rgba(var(--shadow-rgb), 0.08)',
+        border: '1px solid rgba(var(--surface-rgb), 0.6)',
       }}
     >
-      {/* Background gradient */}
-      <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-transparent pointer-events-none" />
+      {/* Background gradient + accent line */}
+      <div className="absolute inset-0 bg-gradient-to-br from-surface/40 to-transparent pointer-events-none" />
+      <div className="absolute inset-x-0 top-0 h-1" style={{ background: `linear-gradient(90deg, ${accent}, transparent 75%)` }} />
       
       {/* Content */}
       <div className="relative z-10">
@@ -41,19 +44,19 @@ export function MetricCard({
             style={{
               background: showGlow 
                 ? 'linear-gradient(135deg, #2EC4B6 0%, #1fa299 100%)'
-                : 'linear-gradient(135deg, rgba(11, 60, 93, 0.1) 0%, rgba(11, 60, 93, 0.05) 100%)',
+                : 'linear-gradient(135deg, rgba(var(--ink-rgb), 0.1) 0%, rgba(var(--ink-rgb), 0.05) 100%)',
               boxShadow: showGlow 
                 ? '0 4px 24px rgba(46, 196, 182, 0.5), inset 0 1px 2px rgba(255, 255, 255, 0.3)'
-                : '0 2px 8px rgba(11, 60, 93, 0.1), inset 0 1px 2px rgba(255, 255, 255, 0.5)',
+                : '0 2px 8px rgba(var(--shadow-rgb), 0.1), inset 0 1px 2px rgba(var(--surface-rgb), 0.5)',
             }}
           >
             <Icon 
-              className={showGlow ? 'text-white' : 'text-[#0B3C5D]'} 
+              className={showGlow ? 'text-white' : 'text-ink'} 
               size={28} 
               strokeWidth={2.5}
             />
           </div>
-          <span className="text-sm text-[#0B3C5D]/60">{title}</span>
+          <span className="text-sm text-ink/60">{title}</span>
         </div>
         
         <div className="relative">
@@ -97,11 +100,11 @@ export function MetricCard({
           )}
           
           <div className="relative flex items-baseline gap-2">
-            <span className="text-4xl text-[#0B3C5D]" style={{ fontWeight: 700 }}>
+            <span className="text-4xl text-ink" style={{ fontWeight: 700 }}>
               {value}
             </span>
             {unit && (
-              <span className="text-lg text-[#0B3C5D]/70" style={{ fontWeight: 500 }}>
+              <span className="text-lg text-ink/70" style={{ fontWeight: 500 }}>
                 {unit}
               </span>
             )}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -8,28 +8,22 @@ import {
   Waves,
   Users,
   MessageSquare,
+  Contact,
   X,
   Eye,
   EyeOff,
-  Camera,
 } from "lucide-react";
 import { useNavigate, useLocation } from "react-router";
-import {
-  signOut,
-  updatePassword,
-  reauthenticateWithCredential,
-  EmailAuthProvider,
-} from "firebase/auth";
-import { doc, updateDoc } from "firebase/firestore"; // ✅ Added Firestore imports
-import { auth, db } from "@/lib/firebase"; // ✅ Added db import
+import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
+import { useEscape } from "@/app/hooks/useEscape";
 
 export function GlassmorphicSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // ✅ Now uses Firestore profile (same source as the table)
-  const { user, profile, role } = useAuth();
+  // ✅ Uses the Supabase profiles row (same source as the table)
+  const { user, profile, role, refreshProfile } = useAuth();
   const displayName = profile?.name || user?.email?.split("@")[0] || "Admin";
   const photoURL = profile?.photoURL || null;
 
@@ -38,6 +32,7 @@ export function GlassmorphicSidebar() {
     { icon: Activity, label: "Sensor Status", path: "/sensors", roles: ["admin", "operator", "viewer"] },
     { icon: Users, label: "User Management", path: "/users", roles: ["admin"] },
     { icon: MessageSquare, label: "SMS Blast Logs", path: "/sms-logs", roles: ["admin", "operator"] },
+    { icon: Contact, label: "Residents", path: "/residents", roles: ["admin", "operator"] },
   ];
 
   const menuItems = allMenuItems.filter(item => role && item.roles.includes(role));
@@ -53,11 +48,49 @@ export function GlassmorphicSidebar() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [saving, setSaving] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
+
+  // Closing always resets the form so stale errors/passwords don't reappear
+  const closeProfile = useCallback(() => {
+    clearTimeout(closeTimer.current);
+    setShowProfile(false);
+    setError("");
+    setSuccess("");
+    setOldPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+  }, []);
+
+  useEscape(showProfile, closeProfile);
 
   async function handleSave() {
     setError("");
     setSuccess("");
 
+    const trimmedName = name.trim();
+    const trimmedEmail = email.trim();
+    const wantsPasswordChange = Boolean(oldPassword || newPassword || confirmPassword);
+
+    // Validate everything up front so nothing is half-saved
+    if (!trimmedName) {
+      setError("Name cannot be empty.");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+    if (wantsPasswordChange && !oldPassword) {
+      setError("Enter your current password to set a new one.");
+      return;
+    }
+    if (wantsPasswordChange && !newPassword) {
+      setError("Enter a new password.");
+      return;
+    }
     if (newPassword && newPassword !== confirmPassword) {
       setError("New passwords do not match.");
       return;
@@ -67,48 +100,76 @@ export function GlassmorphicSidebar() {
       return;
     }
 
+    if (!user) return;
+
+    let emailChangePending = false;
+    setSaving(true);
+
     try {
-      // 1. Update Password in Firebase Auth
-      if (newPassword && oldPassword && user?.email) {
-        const credential = EmailAuthProvider.credential(user.email, oldPassword);
-        await reauthenticateWithCredential(user, credential);
-        await updatePassword(user, newPassword);
-      }
-
-      // 2. ✅ Update Profile in Firestore database
-      if (user?.uid) {
-        // Assuming your users are stored in a "users" collection
-        const userRef = doc(db, "users", user.uid);
-        await updateDoc(userRef, {
-          name: name,
-          email: email
+      // 1. Verify the current password before any change that needs it
+      if (wantsPasswordChange && user.email) {
+        const { error: reauthError } = await supabase.auth.signInWithPassword({
+          email: user.email,
+          password: oldPassword,
         });
+        if (reauthError) throw reauthError;
       }
 
-      setSuccess("Profile updated successfully!");
+      // 2. ✅ Update Profile in the profiles table
+      if (trimmedName !== profile?.name) {
+        const { error: profileError } = await supabase
+          .from("profiles")
+          .update({ name: trimmedName })
+          .eq("id", user.id);
+        if (profileError) throw profileError;
+      }
+
+      // 3. Password and email in one Supabase Auth call, so they succeed or
+      //    fail together. Email changes send a confirmation link first;
+      //    profiles.email syncs automatically once confirmed.
+      const authUpdate: { password?: string; email?: string } = {};
+      if (wantsPasswordChange) authUpdate.password = newPassword;
+      if (trimmedEmail !== user.email) {
+        authUpdate.email = trimmedEmail;
+        emailChangePending = true;
+      }
+      if (Object.keys(authUpdate).length > 0) {
+        const { error: authError } = await supabase.auth.updateUser(authUpdate);
+        if (authError) throw authError;
+      }
+
+      await refreshProfile();
+
+      setSuccess(emailChangePending
+        ? "Profile updated! Check your new email to confirm the change."
+        : "Profile updated successfully!");
       setOldPassword("");
       setNewPassword("");
       setConfirmPassword("");
       
-      // Optional: Close the modal automatically after a short delay
-      setTimeout(() => {
-        setShowProfile(false);
-        setSuccess("");
-      }, 1500);
+      // Close the modal automatically after a short delay
+      closeTimer.current = setTimeout(closeProfile, emailChangePending ? 3000 : 1500);
 
     } catch (err: any) {
-      if (err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
+      if (err.code === "invalid_credentials") {
         setError("Current password is incorrect.");
+      } else if (err.code === "email_exists") {
+        setError("That email is already in use by another account.");
+      } else if (err.code === "same_password") {
+        setError("New password must be different from the current one.");
+      } else if (err.code === "weak_password") {
+        setError("New password is too weak.");
       } else {
         setError("Something went wrong. Please try again.");
         console.error("Profile update error:", err);
       }
+    } finally {
+      setSaving(false);
     }
   }
 
   async function handleSignOut() {
-    sessionStorage.removeItem('2fa_verified');
-    await signOut(auth);
+    await supabase.auth.signOut();
     navigate("/signin");
   }
 
@@ -117,11 +178,10 @@ export function GlassmorphicSidebar() {
       <motion.div
         initial={{ x: -20, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
-        transition={{ duration: 0.6 }}
-        className="w-72 h-screen p-6 relative"
+        transition={{ duration: 0.25 }}
+        className="w-72 h-full shrink-0 p-6 relative flex flex-col overflow-y-auto"
         style={{
-          background: "rgba(11, 60, 93, 0.85)",
-          backdropFilter: "blur(20px)",
+          background: "var(--sidebar-bg)",
           borderRadius: "28px",
           boxShadow: `inset 0 0 1px 1px rgba(46, 196, 182, 0.3), 0 20px 60px rgba(11, 60, 93, 0.3)`,
           border: "1px solid rgba(46, 196, 182, 0.2)",
@@ -151,7 +211,7 @@ export function GlassmorphicSidebar() {
                 key={item.label}
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.1 + 0.2 }}
+                transition={{ delay: index * 0.04 }}
                 onClick={() => navigate(item.path)}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 group ${isActive ? "active-menu-item" : "hover:bg-white/5"}`}
                 style={isActive ? {
@@ -176,10 +236,10 @@ export function GlassmorphicSidebar() {
               <div className="w-2 h-2 rounded-full bg-[#2EC4B6] animate-pulse" />
               <span className="text-white/90 text-sm" style={{ fontWeight: 600 }}>System Online</span>
             </div>
-            <p className="text-white/60 text-xs">All sensors operational</p>
+            <p className="text-white/60 text-xs">Dashboard connected</p>
           </div>
 
-          {/* ✅ User Card with Firestore profile data */}
+          {/* ✅ User Card with Supabase profile data */}
           <button
             onClick={() => {
               // Force the inputs to grab the latest data right before opening
@@ -203,7 +263,7 @@ export function GlassmorphicSidebar() {
               </div>
               <div>
                 <p className="text-white text-sm" style={{ fontWeight: 600 }}>{displayName}</p>
-                <p className="text-[#2EC4B6] text-xs capitalize">{role || "Admin"}</p>
+                <p className="text-[#2EC4B6] text-xs capitalize">{role ?? "No role"}</p>
               </div>
             </div>
           </button>
@@ -228,7 +288,7 @@ export function GlassmorphicSidebar() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                onClick={() => setShowProfile(false)}
+                onClick={closeProfile}
                 style={{
                   position: "fixed", inset: 0, zIndex: 9998,
                   background: "rgba(0,0,0,0.6)",
@@ -242,6 +302,9 @@ export function GlassmorphicSidebar() {
                 pointerEvents: "none",
               }}>
                 <motion.div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="edit-profile-title"
                   initial={{ opacity: 0, scale: 0.95, y: 20 }}
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -259,11 +322,13 @@ export function GlassmorphicSidebar() {
                   {/* Header */}
                   <div className="flex items-center justify-between mb-6">
                     <div>
-                      <h2 style={{ fontWeight: 700, fontSize: "18px", color: "#0f172a" }}>Edit Profile</h2>
+                      <h2 id="edit-profile-title" style={{ fontWeight: 700, fontSize: "18px", color: "#0f172a" }}>Edit Profile</h2>
                       <p style={{ fontSize: "13px", color: "#6b7280", marginTop: "2px" }}>Update your account information</p>
                     </div>
                     <button
-                      onClick={() => { setShowProfile(false); setError(""); setSuccess(""); }}
+                      type="button"
+                      aria-label="Close"
+                      onClick={closeProfile}
                       style={{ background: "#f1f5f9", border: "none", borderRadius: "50%", width: "36px", height: "36px", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
                     >
                       <X size={18} color="#64748b" />
@@ -272,28 +337,25 @@ export function GlassmorphicSidebar() {
 
                   {/* ✅ Avatar with photo support */}
                   <div className="flex justify-center mb-6">
-                    <div style={{ position: "relative" }}>
+                    <div>
                       <div style={{ width: "72px", height: "72px", borderRadius: "50%", background: "linear-gradient(135deg, #2EC4B6 0%, #1fa299 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "28px", color: "white", fontWeight: 700, overflow: "hidden" }}>
                         {photoURL
                           ? <img src={photoURL} alt={displayName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                           : displayName.charAt(0).toUpperCase()
                         }
                       </div>
-                      <div style={{ position: "absolute", bottom: 0, right: 0, width: "26px", height: "26px", borderRadius: "50%", background: "#0d9488", border: "2px solid white", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-                        <Camera size={12} color="white" />
-                      </div>
                     </div>
                   </div>
 
                   {/* Name & Email Fields */}
                   {[
-                    { label: "Full Name", value: name, onChange: setName, type: "text", placeholder: "e.g. Juan Dela Cruz" },
-                    { label: "Email Address", value: email, onChange: setEmail, type: "email", placeholder: "e.g. juan@floodsense.ph" },
-                  ].map(({ label, value, onChange, type, placeholder }) => (
+                    { id: "profile-name", label: "Full Name", value: name, onChange: setName, type: "text", placeholder: "e.g. Juan Dela Cruz", autoComplete: "name" },
+                    { id: "profile-email", label: "Email Address", value: email, onChange: setEmail, type: "email", placeholder: "e.g. juan@floodsense.ph", autoComplete: "email" },
+                  ].map(({ id, label, value, onChange, type, placeholder, autoComplete }) => (
                     <div key={label} style={{ marginBottom: "14px" }}>
-                      <label style={{ fontSize: "13px", fontWeight: 600, color: "#374151", display: "block", marginBottom: "5px" }}>{label}</label>
+                      <label htmlFor={id} style={{ fontSize: "13px", fontWeight: 600, color: "#374151", display: "block", marginBottom: "5px" }}>{label}</label>
                       <input
-                        type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+                        id={id} type={type} autoComplete={autoComplete} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
                         style={{ width: "100%", padding: "10px 14px", borderRadius: "10px", border: "1px solid #e5e7eb", fontSize: "14px", outline: "none", boxSizing: "border-box" }}
                       />
                     </div>
@@ -307,18 +369,18 @@ export function GlassmorphicSidebar() {
 
                   {/* Password Fields */}
                   {[
-                    { label: "Current Password", value: oldPassword, onChange: setOldPassword, show: showOld, onToggle: () => setShowOld(!showOld) },
-                    { label: "New Password", value: newPassword, onChange: setNewPassword, show: showNew, onToggle: () => setShowNew(!showNew) },
-                    { label: "Confirm New Password", value: confirmPassword, onChange: setConfirmPassword, show: showConfirm, onToggle: () => setShowConfirm(!showConfirm) },
-                  ].map(({ label, value, onChange, show, onToggle }) => (
+                    { id: "profile-old-password", label: "Current Password", value: oldPassword, onChange: setOldPassword, show: showOld, onToggle: () => setShowOld(!showOld), autoComplete: "current-password" },
+                    { id: "profile-new-password", label: "New Password", value: newPassword, onChange: setNewPassword, show: showNew, onToggle: () => setShowNew(!showNew), autoComplete: "new-password" },
+                    { id: "profile-confirm-password", label: "Confirm New Password", value: confirmPassword, onChange: setConfirmPassword, show: showConfirm, onToggle: () => setShowConfirm(!showConfirm), autoComplete: "new-password" },
+                  ].map(({ id, label, value, onChange, show, onToggle, autoComplete }) => (
                     <div key={label} style={{ marginBottom: "12px" }}>
-                      <label style={{ fontSize: "13px", fontWeight: 600, color: "#374151", display: "block", marginBottom: "5px" }}>{label}</label>
+                      <label htmlFor={id} style={{ fontSize: "13px", fontWeight: 600, color: "#374151", display: "block", marginBottom: "5px" }}>{label}</label>
                       <div style={{ position: "relative" }}>
                         <input
-                          type={show ? "text" : "password"} value={value} onChange={e => onChange(e.target.value)} placeholder="••••••••"
+                          id={id} autoComplete={autoComplete} type={show ? "text" : "password"} value={value} onChange={e => onChange(e.target.value)} placeholder="••••••••"
                           style={{ width: "100%", padding: "10px 40px 10px 14px", borderRadius: "10px", border: "1px solid #e5e7eb", fontSize: "14px", outline: "none", boxSizing: "border-box" }}
                         />
-                        <button onClick={onToggle} style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#9ca3af" }}>
+                        <button type="button" aria-label={show ? "Hide password" : "Show password"} onClick={onToggle} style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#9ca3af" }}>
                           {show ? <EyeOff size={15} /> : <Eye size={15} />}
                         </button>
                       </div>
@@ -332,16 +394,19 @@ export function GlassmorphicSidebar() {
                   {/* Actions */}
                   <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
                     <button
-                      onClick={() => { setShowProfile(false); setError(""); setSuccess(""); }}
+                      type="button"
+                      onClick={closeProfile}
                       style={{ flex: 1, padding: "11px", borderRadius: "10px", border: "1px solid #e5e7eb", background: "white", color: "#6b7280", fontWeight: 600, fontSize: "14px", cursor: "pointer" }}
                     >
                       Cancel
                     </button>
                     <button
+                      type="button"
                       onClick={handleSave}
-                      style={{ flex: 1, padding: "11px", borderRadius: "10px", border: "none", background: "#0d9488", color: "white", fontWeight: 600, fontSize: "14px", cursor: "pointer" }}
+                      disabled={saving}
+                      style={{ flex: 1, padding: "11px", borderRadius: "10px", border: "none", background: saving ? "#99d4d0" : "#0d9488", color: "white", fontWeight: 600, fontSize: "14px", cursor: saving ? "not-allowed" : "pointer" }}
                     >
-                      Save Changes
+                      {saving ? "Saving..." : "Save Changes"}
                     </button>
                   </div>
                 </motion.div>

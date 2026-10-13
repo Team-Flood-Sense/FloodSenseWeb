@@ -1,0 +1,89 @@
+/*
+ * FloodSense light/dark theme tokens.
+ * Colours are stored as "r, g, b" triplets so they can be used with any alpha:
+ *   rgba(var(--ink-rgb), 0.6)   or the Tailwind utilities text-ink/60, bg-surface/80
+ * The dark theme is switched by the `dark` class on <html> (see ThemeContext).
+ */
+
+:root {
+  --ink-rgb: 11, 60, 93;          /* text + tinted overlays */
+  --surface-rgb: 255, 255, 255;   /* cards, inputs, dialogs */
+  --shadow-rgb: 11, 60, 93;       /* drop shadows */
+  --page-bg: #F4F9FB;
+  --link: #1D70A2;
+  --sidebar-bg: rgba(11, 60, 93, 0.9);
+  --card-shadow-hover: 0 16px 44px rgba(11, 60, 93, 0.16);
+  --glow-teal: rgba(46, 196, 182, 0.16);
+  --glow-blue: rgba(29, 112, 162, 0.13);
+  --scroll-thumb: rgba(11, 60, 93, 0.22);
+}
+
+html.dark {
+  color-scheme: dark;
+  --ink-rgb: 226, 238, 246;
+  --surface-rgb: 21, 33, 48;
+  --shadow-rgb: 0, 0, 0;
+  --page-bg: #0A121B;
+  --link: #5BB0E3;
+  --sidebar-bg: rgba(8, 19, 31, 0.94);
+  --card-shadow-hover: 0 16px 44px rgba(0, 0, 0, 0.55);
+  --glow-teal: rgba(46, 196, 182, 0.1);
+  --glow-blue: rgba(29, 112, 162, 0.14);
+  --scroll-thumb: rgba(226, 238, 246, 0.2);
+}
+
+@theme inline {
+  --color-ink: rgb(var(--ink-rgb));
+  --color-surface: rgb(var(--surface-rgb));
+  --color-link: var(--link);
+}
+
+body {
+  font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: var(--page-bg);
+  color: rgb(var(--ink-rgb));
+}
+
+/* App shell background: soft colour glows instead of a flat fill */
+.app-bg {
+  background:
+    radial-gradient(900px 520px at 88% -8%, var(--glow-teal), transparent 62%),
+    radial-gradient(760px 520px at -6% 108%, var(--glow-blue), transparent 60%),
+    var(--page-bg);
+}
+
+/* Cards lift slightly on hover */
+.card-lift {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card-lift:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--card-shadow-hover) !important;
+}
+
+/* Smooth colour change when toggling the theme */
+.theme-fade,
+.theme-fade * {
+  transition: background-color 0.25s ease, border-color 0.25s ease, color 0.25s ease;
+}
+
+/* Dark map: invert the light OpenStreetMap tiles instead of loading another tile set */
+html.dark .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.92) saturate(0.8);
+}
+
+/* Native date pickers / selects follow the theme */
+html.dark select option {
+  background: rgb(var(--surface-rgb));
+  color: rgb(var(--ink-rgb));
+}
+
+::selection {
+  background: rgba(46, 196, 182, 0.3);
+}
+
+/* Slim scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
