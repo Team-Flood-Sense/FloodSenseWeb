@@ -3,24 +3,38 @@ import { motion } from 'motion/react';
 import { MapPin } from 'lucide-react';
 import L from 'leaflet';
 
-// ── IMPORTANT ────────────────────────────────────────────
-// Make sure you have these in main.tsx:
-//   import "leaflet/dist/leaflet.css";
-//
-// And these installed:
-//   npm install leaflet
-//   npm install --save-dev @types/leaflet
-// ─────────────────────────────────────────────────────────
+// Leaflet's stylesheet is imported in main.tsx ("leaflet/dist/leaflet.css").
 
-// ── COORDINATES ──────────────────────────────────────────
-// Replace these with your actual GPS coordinates once
-// you physically measure them at TUP Manila.
+// ── LOCATIONS ────────────────────────────────────────────
+// Barangay Pamplona 3, Las Piñas City. Coordinates supplied by the barangay.
 // ─────────────────────────────────────────────────────────
-const SENSOR_NODE_1 = { lat: 14.5874, lng: 120.9841 }; // ← your actual sensor spot
-const EVACUATION      = { lat: 14.5882, lng: 120.9852 }; // ← placeholder, update later
-const SAFE_ZONE       = { lat: 14.5868, lng: 120.9858 }; // ← placeholder, update later
+type Place = { name: string; lat: number; lng: number };
 
-function makeIcon(color: string, isSquare = false): L.DivIcon {
+const FLOOD_AREAS: Place[] = [
+  { name: 'Flood Area 1', lat: 14.456840433002867, lng: 120.98282717398664 },
+  { name: 'Flood Area 2', lat: 14.454728512437777, lng: 120.9837726555534 },
+];
+
+const EVACUATION_AREAS: Place[] = [
+  { name: 'Evacuation Area 1', lat: 14.454053235350871, lng: 120.98067216651691 },
+  { name: 'Evacuation Area 2', lat: 14.454186996765806, lng: 120.98035432436127 },
+  { name: 'Evacuation Area 3', lat: 14.45703539568615, lng: 120.98108983679258 },
+];
+
+const DRRM_OFFICE: Place = {
+  name: 'Barangay Pamplona 3 DRRM Office',
+  lat: 14.455053133983723,
+  lng: 120.98506119230326,
+};
+
+// Marker glyphs (24x24 paths)
+const GLYPHS = {
+  droplet: 'M12 2.7c-.3 0-.6.1-.8.4C9.3 5.4 5 10.2 5 14a7 7 0 0014 0c0-3.8-4.3-8.6-6.2-10.9-.2-.3-.5-.4-.8-.4z',
+  shelter: 'M12 3L2 12h3v8h6v-5h2v5h6v-8h3L12 3z',
+  shield: 'M12 2L4 5v6c0 5.5 3.4 10.7 8 12 4.6-1.3 8-6.5 8-12V5l-8-3z',
+} as const;
+
+function makeIcon(color: string, glyph: keyof typeof GLYPHS, isSquare = false): L.DivIcon {
   return L.divIcon({
     className: '',
     html: `
@@ -43,8 +57,7 @@ function makeIcon(color: string, isSquare = false): L.DivIcon {
           box-shadow:0 4px 15px ${color}99;
           display:flex;align-items:center;justify-content:center;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="white">
-            <path d="M12 2a7 7 0 017 7c0 5.25-7 13-7 13S5 14.25 5 9a7 7 0
-              017-7zm0 4.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5z"/>
+            <path d="${GLYPHS[glyph]}"/>
           </svg>
         </div>
       </div>`,
@@ -54,6 +67,15 @@ function makeIcon(color: string, isSquare = false): L.DivIcon {
   });
 }
 
+function popup(title: string, kind: string, kindColor: string, place: Place) {
+  return `
+    <div style="font-family:'Plus Jakarta Sans','Segoe UI',sans-serif;min-width:170px;">
+      <strong style="font-size:14px;color:#0f172a;">${title}</strong><br/>
+      <span style="font-size:12px;color:${kindColor};font-weight:600;">${kind}</span><br/>
+      <span style="font-size:11px;color:#94a3b8;">${place.lat.toFixed(5)}, ${place.lng.toFixed(5)}</span>
+    </div>`;
+}
+
 export function GeospatialMonitor() {
   const mapDivRef = useRef<HTMLDivElement>(null);
   const mapRef    = useRef<L.Map | null>(null);
@@ -61,54 +83,37 @@ export function GeospatialMonitor() {
   useEffect(() => {
     if (mapRef.current || !mapDivRef.current) return;
 
-    // Init map centered on TUP Manila
-    mapRef.current = L.map(mapDivRef.current, {
-      center: [14.5876, 120.9850],
-      zoom: 17,
-      zoomControl: true,
-    });
+    const map = L.map(mapDivRef.current, { zoomControl: true });
+    mapRef.current = map;
 
     // OpenStreetMap tiles (free, no API key)
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
       maxZoom: 19,
-    }).addTo(mapRef.current);
+    }).addTo(map);
 
-    // ── Sensor Node 1 (Flood Risk) ──
-    L.marker([SENSOR_NODE_1.lat, SENSOR_NODE_1.lng], {
-      icon: makeIcon('#FF6B35'),
-    })
-      .addTo(mapRef.current)
-      .bindPopup(`
-        <div style="font-family:'Segoe UI',sans-serif;min-width:160px;">
-          <strong style="font-size:14px;color:#0f172a;">Sensor Node 1</strong><br/>
-          <span style="font-size:12px;color:#64748b;">Type: Flood Risk Sensor</span><br/>
-          <span style="font-size:12px;color:#64748b;">Status: </span>
-          <span style="font-size:12px;color:#22c55e;font-weight:600;">● Online</span>
-        </div>`);
+    // ── Flood areas ──
+    FLOOD_AREAS.forEach((place) => {
+      L.marker([place.lat, place.lng], { icon: makeIcon('#FF6B35', 'droplet'), title: place.name })
+        .addTo(map)
+        .bindPopup(popup(place.name, 'Flood-prone area', '#FF6B35', place));
+    });
 
-    // ── Evacuation Center ──
-    L.marker([EVACUATION.lat, EVACUATION.lng], {
-      icon: makeIcon('#3B82F6', true),
-    })
-      .addTo(mapRef.current)
-      .bindPopup(`
-        <div style="font-family:'Segoe UI',sans-serif;min-width:160px;">
-          <strong style="font-size:14px;color:#0f172a;">Evacuation Center</strong><br/>
-          <span style="font-size:12px;color:#3b82f6;font-weight:600;">Safe Zone</span>
-        </div>`);
+    // ── Evacuation areas ──
+    EVACUATION_AREAS.forEach((place) => {
+      L.marker([place.lat, place.lng], { icon: makeIcon('#3B82F6', 'shelter', true), title: place.name })
+        .addTo(map)
+        .bindPopup(popup(place.name, 'Evacuation area', '#3B82F6', place));
+    });
 
-    // ── Safe Zone Sensor ──
-    L.marker([SAFE_ZONE.lat, SAFE_ZONE.lng], {
-      icon: makeIcon('#2EC4B6'),
-    })
-      .addTo(mapRef.current)
-      .bindPopup(`
-        <div style="font-family:'Segoe UI',sans-serif;min-width:160px;">
-          <strong style="font-size:14px;color:#0f172a;">Sensor Node 2</strong><br/>
-          <span style="font-size:12px;color:#64748b;">Type: Safe Zone Sensor</span><br/>
-          <span style="font-size:12px;color:#22c55e;font-weight:600;">● Online</span>
-        </div>`);
+    // ── DRRM office ──
+    L.marker([DRRM_OFFICE.lat, DRRM_OFFICE.lng], { icon: makeIcon('#2EC4B6', 'shield'), title: DRRM_OFFICE.name })
+      .addTo(map)
+      .bindPopup(popup(DRRM_OFFICE.name, 'Command post', '#2EC4B6', DRRM_OFFICE));
+
+    // Frame every location on screen
+    const points = [...FLOOD_AREAS, ...EVACUATION_AREAS, DRRM_OFFICE].map((p) => [p.lat, p.lng] as [number, number]);
+    map.fitBounds(L.latLngBounds(points), { padding: [60, 60], maxZoom: 17 });
 
     return () => {
       mapRef.current?.remove();
@@ -120,7 +125,7 @@ export function GeospatialMonitor() {
     <motion.div
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.6, delay: 0.2 }}
+      transition={{ duration: 0.25 }}
       className="relative overflow-hidden"
       style={{
         borderRadius: '28px',
@@ -138,7 +143,7 @@ export function GeospatialMonitor() {
               Live Geospatial Monitor
             </h3>
             <p className="text-white/60 text-sm">
-              Real-time flood risk monitoring — Barangay 659, Ermita, Manila
+              Real-time flood risk monitoring — Barangay Pamplona 3, Las Piñas City
             </p>
           </div>
           <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/5">
@@ -162,21 +167,21 @@ export function GeospatialMonitor() {
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded-full" style={{ background: '#FF6B35', boxShadow: '0 0 8px rgba(255, 107, 53, 0.5)' }} />
-              <span className="text-white/80 text-xs">Flood Risk Sensor</span>
+              <span className="text-white/80 text-xs">Flood Area</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded-full" style={{ background: '#2EC4B6', boxShadow: '0 0 8px rgba(46, 196, 182, 0.5)' }} />
-              <span className="text-white/80 text-xs">Safe Zone Sensor</span>
+              <span className="text-white/80 text-xs">DRRM Office</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded-full" style={{ background: '#3B82F6', boxShadow: '0 0 8px rgba(59, 130, 246, 0.5)' }} />
-              <span className="text-white/80 text-xs">Evacuation Center</span>
+              <span className="text-white/80 text-xs">Evacuation Area</span>
             </div>
           </div>
         </div>
 
         {/* Location badge */}
-        <div className="absolute top-4 left-4 pointer-events-none" style={{ zIndex: 1000 }}>
+        <div className="absolute top-4 right-4 pointer-events-none" style={{ zIndex: 1000 }}>
           <div
             className="flex items-center gap-2 px-3 py-2 rounded-full"
             style={{
@@ -187,7 +192,7 @@ export function GeospatialMonitor() {
           >
             <MapPin className="text-[#2EC4B6]" size={14} />
             <span className="text-white text-xs" style={{ fontWeight: 600 }}>
-              Barangay 659, Ermita, Manila
+              Barangay Pamplona 3, Las Piñas City
             </span>
           </div>
         </div>
