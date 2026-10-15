@@ -3,12 +3,13 @@ import { Search, UserPlus, Upload, Trash2, PauseCircle, PlayCircle, X, AlertTria
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useEscape } from '@/app/hooks/useEscape';
-import { DEFAULT_AREA, SMS_AREAS, formatPhone, isValidPhone, normalizePhone } from '@/lib/sms';
+import { DEFAULT_AREA, SMS_AREAS, formatPhone, isValidEmail, isValidPhone, normalizeEmail, normalizePhone } from '@/lib/alerts';
 
 interface Resident {
   id: string;
   name: string;
-  phone: string;
+  phone: string | null;
+  email: string | null;
   area: string;
   isActive: boolean;
   createdAt: Date;
@@ -21,33 +22,46 @@ function toResident(row: any): Resident {
   return {
     id: row.id,
     name: row.name || '',
-    phone: row.phone,
+    phone: row.phone ?? null,
+    email: row.email ?? null,
     area: row.area,
     isActive: row.is_active,
     createdAt: new Date(row.created_at),
   };
 }
 
-// "Juan Dela Cruz, 0917 123 4567" or just "0917 123 4567", one per line
-function parseImport(text: string, area: string) {
-  const valid: { name: string; phone: string; area: string; is_verified: boolean }[] = [];
+// One resident per line: any mix of name, mobile number and email, separated by commas, e.g.
+//   Juan Dela Cruz, 0917 123 4567, juan@example.com
+//   0917 123 4567
+//   maria@example.com
+function parseImport(text: string) {
+  const valid: { name: string; phone: string | null; email: string | null }[] = [];
   const invalid: string[] = [];
   const seen = new Set<string>();
 
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
-    const parts = line.split(/[,;\t]/).map((p) => p.trim());
+
+    const parts = line.split(/[,;\t]/).map((p) => p.trim()).filter(Boolean);
     const phoneIdx = parts.findIndex((p) => isValidPhone(p));
-    if (phoneIdx === -1) {
+    const emailIdx = parts.findIndex((p) => p.includes('@') && isValidEmail(p));
+    // A token with an "@" that is not a valid email makes the whole line invalid
+    const badEmail = parts.some((p, i) => p.includes('@') && i !== emailIdx);
+
+    if ((phoneIdx === -1 && emailIdx === -1) || badEmail) {
       invalid.push(line);
       continue;
     }
-    const phone = normalizePhone(parts[phoneIdx]);
-    if (seen.has(phone)) continue;
-    seen.add(phone);
-    const name = parts.filter((_, i) => i !== phoneIdx).join(' ').trim();
-    valid.push({ name, phone, area, is_verified: true });
+
+    const phone = phoneIdx === -1 ? null : normalizePhone(parts[phoneIdx]);
+    const email = emailIdx === -1 ? null : normalizeEmail(parts[emailIdx]);
+    if ((phone && seen.has(phone)) || (email && seen.has(email))) continue;
+    if (phone) seen.add(phone);
+    if (email) seen.add(email);
+
+    const name = parts.filter((_, i) => i !== phoneIdx && i !== emailIdx).join(' ').trim();
+    valid.push({ name, phone, email });
   }
   return { valid, invalid };
 }
@@ -114,7 +128,7 @@ export function ResidentsTable() {
   const [notice, setNotice] = useState('');
 
   const [showAdd, setShowAdd] = useState(false);
-  const [newResident, setNewResident] = useState({ name: '', phone: '', area: DEFAULT_AREA });
+  const [newResident, setNewResident] = useState({ name: '', phone: '', email: '', area: DEFAULT_AREA });
   const [showImport, setShowImport] = useState(false);
   const [importText, setImportText] = useState('');
   const [importArea, setImportArea] = useState(DEFAULT_AREA);
@@ -171,32 +185,46 @@ export function ResidentsTable() {
     return residents.filter((r) =>
       r.name.toLowerCase().includes(q) ||
       r.area.toLowerCase().includes(q) ||
-      (tail.length >= 3 && r.phone.includes(tail))
+      (r.email ?? '').includes(q) ||
+      (tail.length >= 3 && (r.phone ?? '').includes(tail))
     );
   }, [residents, searchQuery]);
 
   const activeCount = residents.filter((r) => r.isActive).length;
-  const parsed = useMemo(() => parseImport(importText, importArea), [importText, importArea]);
+  const withPhone = residents.filter((r) => r.isActive && r.phone).length;
+  const withEmail = residents.filter((r) => r.isActive && r.email).length;
+  const parsed = useMemo(() => parseImport(importText), [importText]);
 
   async function handleAdd() {
     setModalError('');
-    if (!isValidPhone(newResident.phone)) {
+    const phoneText = newResident.phone.trim();
+    const emailText = newResident.email.trim();
+    if (!phoneText && !emailText) {
+      setModalError('Enter a mobile number, an email, or both.');
+      return;
+    }
+    if (phoneText && !isValidPhone(phoneText)) {
       setModalError('Enter a valid Philippine mobile number, e.g. 0917 123 4567.');
+      return;
+    }
+    if (emailText && !isValidEmail(emailText)) {
+      setModalError('Enter a valid email address.');
       return;
     }
     setBusy(true);
     const { error } = await supabase.from('residents').insert({
       name: newResident.name.trim(),
-      phone: normalizePhone(newResident.phone),
+      phone: phoneText ? normalizePhone(phoneText) : null,
+      email: emailText ? normalizeEmail(emailText) : null,
       area: newResident.area,
     });
     setBusy(false);
     if (error) {
-      setModalError(error.code === '23505' ? 'This number is already in the list.' : 'Failed to add the resident. Please try again.');
+      setModalError(error.code === '23505' ? 'This number or email is already in the list.' : 'Failed to add the resident. Please try again.');
       return;
     }
     closeModals();
-    setNewResident({ name: '', phone: '', area: DEFAULT_AREA });
+    setNewResident({ name: '', phone: '', email: '', area: DEFAULT_AREA });
     setNotice('Resident added.');
     fetchResidents();
   }
@@ -204,22 +232,22 @@ export function ResidentsTable() {
   async function handleImport() {
     setModalError('');
     if (parsed.valid.length === 0) {
-      setModalError('No valid phone numbers found. Use one per line, e.g. "Juan Dela Cruz, 0917 123 4567".');
+      setModalError('No valid numbers or emails found. Use one resident per line, e.g. "Juan Dela Cruz, 0917 123 4567, juan@example.com".');
       return;
     }
     setBusy(true);
-    // Numbers that are already in the list are skipped, not overwritten
-    const { error } = await supabase
-      .from('residents')
-      .upsert(parsed.valid, { onConflict: 'phone', ignoreDuplicates: true });
+    // Entries already in the list (same number or same email) are skipped, not overwritten
+    const { data, error } = await supabase.rpc('import_residents', { rows: parsed.valid, target_area: importArea });
     setBusy(false);
     if (error) {
       setModalError('Import failed. Please try again.');
       return;
     }
+    const added = typeof data === 'number' ? data : parsed.valid.length;
+    const skipped = parsed.valid.length - added;
     closeModals();
     setImportText('');
-    setNotice(`Imported ${parsed.valid.length} number${parsed.valid.length === 1 ? '' : 's'} (already-listed numbers were skipped).`);
+    setNotice(`Imported ${added} resident${added === 1 ? '' : 's'}${skipped > 0 ? ` (${skipped} already in the list were skipped)` : ''}.`);
     fetchResidents();
   }
 
@@ -263,7 +291,7 @@ export function ResidentsTable() {
             <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
               <div>
                 <h3 className="text-ink text-2xl mb-1" style={{ fontWeight: 700 }}>Residents</h3>
-                <p className="text-ink/60 text-sm">People who receive SMS alerts. Only active, verified residents are texted.</p>
+                <p className="text-ink/60 text-sm">People who receive SMS and email alerts. Only active, verified residents are contacted.</p>
               </div>
               <div className="flex gap-3">
                 <button
@@ -302,7 +330,7 @@ export function ResidentsTable() {
               <input
                 type="text"
                 aria-label="Search residents"
-                placeholder="Search by name, number or area..."
+                placeholder="Search by name, number, email or area..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-12 pr-4 py-3 bg-transparent text-ink placeholder:text-ink/40 text-sm outline-none"
@@ -323,7 +351,7 @@ export function ResidentsTable() {
               <thead>
                 <tr className="border-b border-ink/10 bg-ink/[0.04]">
                   <th className={th} style={{ fontWeight: 600 }}>Resident</th>
-                  <th className={th} style={{ fontWeight: 600 }}>Mobile number</th>
+                  <th className={th} style={{ fontWeight: 600 }}>Contact</th>
                   <th className={th} style={{ fontWeight: 600 }}>Area</th>
                   <th className={th} style={{ fontWeight: 600 }}>Status</th>
                   <th className={th} style={{ fontWeight: 600 }}>Added</th>
@@ -348,7 +376,10 @@ export function ResidentsTable() {
                         <span className="text-ink text-sm" style={{ fontWeight: 600 }}>{r.name || 'Unnamed'}</span>
                       </div>
                     </td>
-                    <td className="px-8 py-4 text-ink/80 text-sm" style={{ fontFamily: 'monospace' }}>{formatPhone(r.phone)}</td>
+                    <td className="px-8 py-4 text-sm">
+                      {r.phone && <div className="text-ink/80" style={{ fontFamily: 'monospace' }}>{formatPhone(r.phone)}</div>}
+                      {r.email && <div className="text-ink/60 text-xs break-all">{r.email}</div>}
+                    </td>
                     <td className="px-8 py-4 text-ink/70 text-sm">{r.area}</td>
                     <td className="px-8 py-4">
                       <span
@@ -369,7 +400,7 @@ export function ResidentsTable() {
                       <div className="flex items-center justify-center gap-2">
                         <button
                           type="button"
-                          aria-label={r.isActive ? `Pause alerts for ${r.name || r.phone}` : `Resume alerts for ${r.name || r.phone}`}
+                          aria-label={r.isActive ? `Pause alerts for ${r.name || r.phone || r.email}` : `Resume alerts for ${r.name || r.phone || r.email}`}
                           title={r.isActive ? 'Pause alerts' : 'Resume alerts'}
                           onClick={() => toggleActive(r)}
                           className="p-2 rounded-xl text-link"
@@ -379,7 +410,7 @@ export function ResidentsTable() {
                         </button>
                         <button
                           type="button"
-                          aria-label={`Delete ${r.name || r.phone}`}
+                          aria-label={`Delete ${r.name || r.phone || r.email}`}
                           onClick={() => { setModalError(''); setDeleting(r); }}
                           className="p-2 rounded-xl"
                           style={{ background: 'rgba(255, 107, 53, 0.1)' }}
@@ -399,6 +430,8 @@ export function ResidentsTable() {
             <div className="flex gap-2">
               <span className="px-3 py-1.5 rounded-full text-xs" style={{ background: 'rgba(46, 196, 182, 0.1)', color: '#2EC4B6', fontWeight: 600 }}>{activeCount.toLocaleString()} receiving</span>
               <span className="px-3 py-1.5 rounded-full text-xs text-ink/70" style={{ background: 'rgba(var(--ink-rgb), 0.08)', fontWeight: 600 }}>{(residents.length - activeCount).toLocaleString()} paused</span>
+              <span className="px-3 py-1.5 rounded-full text-xs text-ink/70" style={{ background: 'rgba(var(--ink-rgb), 0.08)', fontWeight: 600 }}>{withPhone.toLocaleString()} with SMS</span>
+              <span className="px-3 py-1.5 rounded-full text-xs text-ink/70" style={{ background: 'rgba(var(--ink-rgb), 0.08)', fontWeight: 600 }}>{withEmail.toLocaleString()} with email</span>
             </div>
           </div>
         </div>
@@ -415,8 +448,13 @@ export function ResidentsTable() {
                 <input id="res-name" style={inputStyle} placeholder="e.g. Juan Dela Cruz" value={newResident.name} onChange={(e) => setNewResident({ ...newResident, name: e.target.value })} autoComplete="off" />
               </div>
               <div>
-                <label htmlFor="res-phone" className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Mobile number</label>
+                <label htmlFor="res-phone" className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Mobile number (for SMS)</label>
                 <input id="res-phone" style={inputStyle} placeholder="e.g. 0917 123 4567" inputMode="tel" value={newResident.phone} onChange={(e) => setNewResident({ ...newResident, phone: e.target.value })} autoComplete="off" />
+              </div>
+              <div>
+                <label htmlFor="res-email" className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Email (for email alerts)</label>
+                <input id="res-email" type="email" style={inputStyle} placeholder="e.g. juan@example.com" value={newResident.email} onChange={(e) => setNewResident({ ...newResident, email: e.target.value })} autoComplete="off" />
+                <p className="text-ink/45 text-xs mt-1">Enter a mobile number, an email, or both.</p>
               </div>
               <div>
                 <label htmlFor="res-area" className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Area</label>
@@ -437,26 +475,26 @@ export function ResidentsTable() {
           <Modal onClose={closeModals} title="Import Residents" subtitle="Paste one resident per line" wide>
             <div className="space-y-4">
               <div>
-                <label htmlFor="imp-text" className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Numbers</label>
+                <label htmlFor="imp-text" className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Residents</label>
                 <textarea
                   id="imp-text"
                   rows={7}
                   style={{ ...inputStyle, resize: 'vertical', fontFamily: 'monospace', fontSize: '13px' }}
-                  placeholder={'Juan Dela Cruz, 0917 123 4567\nMaria Santos, +63 918 765 4321\n09191234567'}
+                  placeholder={'Juan Dela Cruz, 0917 123 4567, juan@example.com\nMaria Santos, +63 918 765 4321\npedro@example.com'}
                   value={importText}
                   onChange={(e) => setImportText(e.target.value)}
                 />
-                <p className="text-ink/45 text-xs mt-1">Name is optional. Accepts 09XX, +639XX or 9XX formats. Numbers already in the list are skipped.</p>
+                <p className="text-ink/45 text-xs mt-1">Each line can have a name, a mobile number, an email, or any mix. Numbers: 09XX, +639XX or 9XX. Anyone already in the list is skipped.</p>
               </div>
               <div>
-                <label htmlFor="imp-area" className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Area for all imported numbers</label>
+                <label htmlFor="imp-area" className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Area for everyone imported</label>
                 <select id="imp-area" style={inputStyle} value={importArea} onChange={(e) => setImportArea(e.target.value)}>
                   {AREAS.map((a) => <option key={a} value={a}>{a}</option>)}
                 </select>
               </div>
               {importText.trim() && (
                 <div className="p-3 rounded-xl text-xs" style={{ background: 'rgba(var(--ink-rgb), 0.04)', border: '1px solid rgba(var(--ink-rgb), 0.1)', fontWeight: 600 }}>
-                  <span style={{ color: '#2EC4B6' }}>{parsed.valid.length} valid</span>
+                  <span style={{ color: '#2EC4B6' }}>{parsed.valid.length} valid ({parsed.valid.filter((v) => v.phone).length} with SMS, {parsed.valid.filter((v) => v.email).length} with email)</span>
                   {parsed.invalid.length > 0 && (
                     <span style={{ color: '#EF4444' }}> · {parsed.invalid.length} not recognised: <span style={{ fontWeight: 500 }}>{parsed.invalid.slice(0, 3).join(' | ')}{parsed.invalid.length > 3 ? ' …' : ''}</span></span>
                   )}
@@ -481,7 +519,7 @@ export function ResidentsTable() {
               </div>
             </div>
             <p className="text-ink/70 text-sm text-center mb-6">
-              Remove <span className="text-ink" style={{ fontWeight: 700 }}>{deleting.name || formatPhone(deleting.phone)}</span> from the SMS list? They will stop receiving alerts. To keep them but stop texts, use Pause instead.
+              Remove <span className="text-ink" style={{ fontWeight: 700 }}>{deleting.name || (deleting.phone ? formatPhone(deleting.phone) : deleting.email)}</span> from the alert list? They will stop receiving SMS and email alerts. To keep them but stop alerts, use Pause instead.
             </p>
             {modalError && <p className="text-center mb-3" style={{ color: '#ef4444', fontSize: '13px', fontWeight: 500 }}>⚠ {modalError}</p>}
             <div className="flex gap-3">
