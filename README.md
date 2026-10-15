@@ -19,7 +19,7 @@ React + Vite frontend with a Supabase backend (Auth, Postgres, Realtime, Edge Fu
 
 1. **Database**: open the [SQL Editor](https://supabase.com/dashboard/project/bgnqqjaipcckqgzzdtxy/sql/new),
    paste all of `supabase/setup-all.sql`, and run it.
-2. **Edge Functions** (`admin-users`, `bootstrap-admin`, `send-sms`). Either:
+2. **Edge Functions** (`admin-users`, `bootstrap-admin`, `send-sms`, `send-email`). Either:
    - CLI: `npx supabase login`, then `npx supabase link --project-ref bgnqqjaipcckqgzzdtxy`, then
      `npx supabase functions deploy <name>` for each; or
    - Dashboard: [Edge Functions](https://supabase.com/dashboard/project/bgnqqjaipcckqgzzdtxy/functions) →
@@ -32,7 +32,14 @@ React + Vite frontend with a Supabase backend (Auth, Postgres, Realtime, Edge Fu
 4. **SMS (Semaphore)**: in [Edge Functions → Secrets](https://supabase.com/dashboard/project/bgnqqjaipcckqgzzdtxy/functions/secrets)
    add `SEMAPHORE_API_KEY` (required) and optionally `SEMAPHORE_SENDER_NAME` (must be approved by
    Semaphore). The key is only ever read by the `send-sms` function, never by the website.
-5. **First admin**: open the app at `/setup` (Sign In shows a link while no admin exists).
+5. **Email**: in the same Secrets page, pick one provider:
+   - **Gmail (no domain needed)**: set `GMAIL_USER` (your Gmail address) and `GMAIL_APP_PASSWORD`
+     (Google Account -> Security -> 2-Step Verification -> App passwords). Limit about 500
+     recipients/day; residents are sent a BCC copy so they can't see each other's addresses.
+   - **Brevo**: create a free [Brevo](https://www.brevo.com) account, verify a sender or
+     authenticate a domain, then set `BREVO_API_KEY` and `EMAIL_SENDER_EMAIL`.
+   Gmail is used when both Gmail secrets exist; otherwise Brevo. `EMAIL_SENDER_NAME` is optional.
+6. **First admin**: open the app at `/setup` (Sign In shows a link while no admin exists).
    Fill in name, email and password; the account is created in Supabase Auth and `profiles`,
    and you're taken to authenticator-app setup. `/setup` closes permanently once an admin exists.
 
@@ -44,16 +51,22 @@ Supabase → Authentication → Users, then set it up again on next sign-in.
 | Role     | Access                                                      |
 |----------|-------------------------------------------------------------|
 | admin    | Everything, including User Management                       |
-| operator | Dashboard, sensors, SMS blast logs, evacuation alarm        |
+| operator | Dashboard, sensors, alert logs, residents, evacuation alarm |
 | viewer   | Dashboard and sensors (read only)                           |
 
-## SMS alerts
+## SMS and email alerts
 
-Staff (admin/operator) manage recipients on the **Residents** page. A blast or the evacuation alarm
-is saved in the SMS Blast Logs and then sent by the `send-sms` function to every *active, verified*
-resident in the chosen area. Status flow: `Pending` → `Sending` → `Sent` (or `Failed`).
-If the Semaphore key isn't set, blasts stay `Pending` and nothing is sent.
-`Sent` means Semaphore accepted the messages; delivery receipts are not tracked yet.
+Staff (admin/operator) manage recipients on the **Residents** page: each resident can have a mobile
+number, an email, or both. When composing an alert, tick **SMS**, **Email** or both. The alert is
+saved in the **Alert Logs** and then sent by the `send-sms` (Semaphore) and/or `send-email` (Brevo)
+function to every *active, verified* resident in the chosen area who has that contact detail. The
+evacuation alarm always uses both channels.
+
+Each channel has its own status in the log: `Pending` -> `Sending` -> `Sent` (or `Failed`).
+If a provider's key isn't set, that channel stays `Pending` and nothing is sent on it.
+`Sent` means the provider accepted the messages; delivery receipts are not tracked yet.
+Alerts can be deleted from the log (tick rows for bulk delete). Admins can delete any alert that isn't
+mid-send; operators only alerts where nothing was delivered. Deletions are kept in the audit log.
 
 ## Not connected yet
 
