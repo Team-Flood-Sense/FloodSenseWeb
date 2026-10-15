@@ -1,9 +1,10 @@
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Calendar, Send, Cpu, User, AlertCircle, Info, AlertTriangle, X, MapPin, Clock, Users, Trash2 } from 'lucide-react';
+import { Search, Calendar, Send, Cpu, User, AlertCircle, Info, AlertTriangle, X, MapPin, Clock, Users, Trash2, Mail, MessageSquare } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { SMS_AREAS, countRecipients, sendBlast, type BlastLevel } from '@/lib/sms';
+import { SMS_AREAS, countRecipients, sendBlast, summarizeResult, type BlastLevel, type Channel } from '@/lib/alerts';
 import { useEscape } from '@/app/hooks/useEscape';
+import { useAuth } from '@/context/AuthContext';
 
 interface SMSBlast {
   id: string;
@@ -12,17 +13,25 @@ interface SMSBlast {
   timestamp: string;
   message: string;
   recipients: number;
-  status: 'Pending' | 'Sending' | 'Sent' | 'Delivered' | 'Failed';
+  status: 'Pending' | 'Sending' | 'Sent' | 'Delivered' | 'Failed' | 'Skipped';
   level: 'CRITICAL' | 'WARNING' | 'INFO';
   triggerSource: 'System' | 'Manual';
   triggeredBy: string;
   location: string;
   errorMessage: string | null;
+  sendSms: boolean;
+  sendEmail: boolean;
+  emailSubject: string | null;
+  emailStatus: 'Pending' | 'Sending' | 'Sent' | 'Failed' | null;
+  emailRecipients: number;
+  emailError: string | null;
 }
 
 const MAX_CHARS = 160;
 // Two concatenated SMS segments; matches the database check (480 incl. margin)
 const HARD_LIMIT = 306;
+// Matches the database limit on the message column
+const EMAIL_LIMIT = 480;
 
 function toBlast(row: any): SMSBlast {
   const createdAt = new Date(row.created_at);
@@ -42,7 +51,36 @@ function toBlast(row: any): SMSBlast {
     triggeredBy: row.triggered_by_name || (row.trigger_source === 'System' ? 'Auto-Detection' : 'Unknown'),
     location: row.location,
     errorMessage: row.error_message ?? null,
+    sendSms: row.send_sms ?? true,
+    sendEmail: row.send_email ?? false,
+    emailSubject: row.email_subject ?? null,
+    emailStatus: row.email_status ?? null,
+    emailRecipients: row.email_recipients ?? 0,
+    emailError: row.email_error ?? null,
   };
+}
+
+/** The channels a blast used, with each one's status. */
+function channelStatuses(b: SMSBlast): { channel: Channel; status: string; count: number }[] {
+  const list: { channel: Channel; status: string; count: number }[] = [];
+  if (b.sendSms) list.push({ channel: 'sms', status: b.status, count: b.recipients });
+  if (b.sendEmail && b.emailStatus) list.push({ channel: 'email', status: b.emailStatus, count: b.emailRecipients });
+  return list;
+}
+
+/** Nothing reached anyone on any channel the blast used, so it is safe to delete. */
+const isAllFailed = (b: SMSBlast) =>
+  (b.status === 'Failed' || b.status === 'Skipped') && (b.emailStatus === null || b.emailStatus === 'Failed');
+
+/**
+ * Admins can delete any alert that isn't mid-send; operators only alerts where nothing was
+ * delivered. (The database enforces the same rules, so this just decides which controls to show.)
+ */
+function canDeleteAlert(b: SMSBlast, role: string | null) {
+  const sending = b.status === 'Sending' || b.emailStatus === 'Sending';
+  const stale = Date.now() - b.createdAt.getTime() > 10 * 60 * 1000;
+  if (sending && !stale) return false;
+  return role === 'admin' || (role === 'operator' && isAllFailed(b));
 }
 
 // YYYY-MM-DD in local time, to compare with <input type="date">
@@ -104,6 +142,24 @@ const getStatusStyle = (status: string) => {
   }
 };
 
+function ChannelChip({ channel, status }: { channel: Channel; status: string }) {
+  const style = getStatusStyle(status);
+  const Icon = channel === 'sms' ? MessageSquare : Mail;
+  const busy = status === 'Pending' || status === 'Sending';
+  return (
+    <div
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full"
+      style={style}
+      title={`${channel === 'sms' ? 'SMS' : 'Email'}: ${status}`}
+    >
+      <Icon size={12} strokeWidth={2.5} />
+      <span className="text-xs" style={{ fontWeight: 600, animation: busy ? 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none' }}>
+        {status}
+      </span>
+    </div>
+  );
+}
+
 export function SMSBlastTable() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDate, setSelectedDate] = useState('');
@@ -112,13 +168,18 @@ export function SMSBlastTable() {
   const [loadError, setLoadError] = useState('');
   const [sending, setSending] = useState(false);
   const [composeError, setComposeError] = useState('');
-  const [recipientCount, setRecipientCount] = useState<number | null>(null);
+  const [counts, setCounts] = useState<{ sms: number | null; email: number | null }>({ sms: null, email: null });
+  const [channels, setChannels] = useState<{ sms: boolean; email: boolean }>({ sms: true, email: false });
+  const [subject, setSubject] = useState('');
   const [notice, setNotice] = useState<{ tone: 'success' | 'warn' | 'error'; text: string } | null>(null);
 
   // Compose modal
   const [showComposeModal, setShowComposeModal] = useState(false);
-  // A single failed blast, or 'all' failed blasts, waiting for delete confirmation
-  const [deleteTarget, setDeleteTarget] = useState<SMSBlast | 'all' | null>(null);
+  const { role } = useAuth();
+  // Rows ticked for bulk delete
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // What is waiting for delete confirmation: one alert, the ticked ones, or every failed one
+  const [deleteTarget, setDeleteTarget] = useState<SMSBlast | 'selected' | 'failed' | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [newBlast, setNewBlast] = useState<{ level: BlastLevel; location: string; message: string }>({ level: 'INFO', location: '', message: '' });
@@ -167,15 +228,43 @@ export function SMSBlastTable() {
   useEscape(showDetailsModal || showComposeModal, closeModals);
   useEscape(deleteTarget !== null, closeDelete);
 
-  const failedCount = blasts.filter((b) => b.status === 'Failed').length;
+  const failedCount = blasts.filter(isAllFailed).length;
 
-  // Only 'Failed' blasts can be deleted (the database enforces this too)
+  // Forget ticked rows that no longer exist (deleted, or removed by someone else)
+  useEffect(() => {
+    setSelected((prev) => {
+      const ids = new Set(blasts.map((b) => b.id));
+      const next = new Set([...prev].filter((id) => ids.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [blasts]);
+
+  const deliveredInDelete =
+    deleteTarget === null || deleteTarget === 'failed'
+      ? 0
+      : deleteTarget === 'selected'
+      ? blasts.filter((b) => selected.has(b.id) && !isAllFailed(b)).length
+      : isAllFailed(deleteTarget) ? 0 : 1;
+
+  // The database decides what may actually be deleted; the count tells us if anything was skipped
   async function handleDelete() {
     if (!deleteTarget) return;
     setDeleting(true);
     setDeleteError('');
-    let q = supabase.from('sms_blasts').delete().eq('status', 'Failed');
-    if (deleteTarget !== 'all') q = q.eq('id', deleteTarget.id);
+
+    const base = supabase.from('sms_blasts').delete();
+    let requested: number;
+    let q;
+    if (deleteTarget === 'failed') {
+      q = base.in('status', ['Failed', 'Skipped']).or('email_status.is.null,email_status.eq.Failed');
+      requested = failedCount;
+    } else if (deleteTarget === 'selected') {
+      q = base.in('id', [...selected]);
+      requested = selected.size;
+    } else {
+      q = base.eq('id', deleteTarget.id);
+      requested = 1;
+    }
     const { data, error } = await q.select('id');
     setDeleting(false);
 
@@ -185,24 +274,36 @@ export function SMSBlastTable() {
     }
     const n = data?.length ?? 0;
     setDeleteTarget(null);
-    setNotice({ tone: 'success', text: n === 0 ? 'Nothing was deleted.' : `Deleted ${n} failed blast${n === 1 ? '' : 's'}.` });
+    setSelected(new Set());
+    setNotice(
+      n === 0
+        ? { tone: 'warn', text: 'Nothing was deleted. Alerts that are still sending, or that only an admin may delete, are kept.' }
+        : n < requested
+        ? { tone: 'warn', text: `Deleted ${n} of ${requested} alerts. The rest are still sending or can only be deleted by an admin.` }
+        : { tone: 'success', text: `Deleted ${n} alert${n === 1 ? '' : 's'}.` },
+    );
     fetchBlasts();
   }
 
   useEffect(() => {
     if (!showComposeModal || !newBlast.location) {
-      setRecipientCount(null);
+      setCounts({ sms: null, email: null });
       return;
     }
     let cancelled = false;
-    setRecipientCount(null);
-    countRecipients(newBlast.location).then((n) => {
-      if (!cancelled) setRecipientCount(n);
+    setCounts({ sms: null, email: null });
+    Promise.all([countRecipients(newBlast.location, 'sms'), countRecipients(newBlast.location, 'email')]).then(([sms, email]) => {
+      if (!cancelled) setCounts({ sms, email });
     });
     return () => {
       cancelled = true;
     };
   }, [showComposeModal, newBlast.location]);
+
+  const reach = (channels.sms ? counts.sms ?? 0 : 0) + (channels.email ? counts.email ?? 0 : 0);
+  const countsReady = counts.sms !== null && counts.email !== null;
+  const messageLimit = channels.sms ? HARD_LIMIT : EMAIL_LIMIT;
+  const counterLimit = channels.sms ? MAX_CHARS : EMAIL_LIMIT;
 
   const query = searchQuery.toLowerCase();
   const filteredBlasts = blasts.filter(blast =>
@@ -212,9 +313,25 @@ export function SMSBlastTable() {
       blast.triggeredBy.toLowerCase().includes(query))
   );
 
+  const deletable = filteredBlasts.filter((b) => canDeleteAlert(b, role));
+  const allTicked = deletable.length > 0 && deletable.every((b) => selected.has(b.id));
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAll = () =>
+    setSelected(allTicked ? new Set() : new Set(deletable.map((b) => b.id)));
+
   async function handleSendBlast() {
     setComposeError('');
     const message = newBlast.message.trim();
+    if (!channels.sms && !channels.email) {
+      setComposeError('Select at least one channel: SMS or Email.');
+      return;
+    }
     if (!newBlast.location) {
       setComposeError('Please select a target location.');
       return;
@@ -223,32 +340,33 @@ export function SMSBlastTable() {
       setComposeError('Please enter a message.');
       return;
     }
-    if (message.length > HARD_LIMIT) {
-      setComposeError(`Message is too long (max ${HARD_LIMIT} characters).`);
+    if (message.length > messageLimit) {
+      setComposeError(`Message is too long (max ${messageLimit} characters${channels.sms ? ' for SMS' : ''}).`);
       return;
     }
-
-    if (recipientCount === 0) {
-      setComposeError('There are no active, verified residents in this area. Add residents first.');
+    if (channels.sms && counts.sms === 0) {
+      setComposeError('No active, verified residents with a mobile number in this area. Add residents or untick SMS.');
+      return;
+    }
+    if (channels.email && counts.email === 0) {
+      setComposeError('No active, verified residents with an email in this area. Add emails or untick Email.');
       return;
     }
 
     setSending(true);
     try {
-      const outcome = await sendBlast({ message, level: newBlast.level, location: newBlast.location });
+      const result = await sendBlast({
+        message,
+        level: newBlast.level,
+        location: newBlast.location,
+        sms: channels.sms,
+        email: channels.email,
+        subject,
+      });
       setShowComposeModal(false);
       setNewBlast({ level: 'INFO', location: '', message: '' });
-
-      if (outcome.kind === 'sent') {
-        setNotice({
-          tone: outcome.warning ? 'warn' : 'success',
-          text: `Sent to ${outcome.recipients.toLocaleString()} resident${outcome.recipients === 1 ? '' : 's'}.${outcome.warning ? ' ' + outcome.warning : ''}`,
-        });
-      } else if (outcome.kind === 'pending') {
-        setNotice({ tone: 'warn', text: `Saved as Pending. ${outcome.reason}` });
-      } else {
-        setNotice({ tone: 'error', text: `Sending failed: ${outcome.error}` });
-      }
+      setSubject('');
+      setNotice(summarizeResult(result));
       fetchBlasts();
     } catch (err) {
       setComposeError((err as Error).message);
@@ -288,8 +406,8 @@ export function SMSBlastTable() {
           <div className="p-8 border-b border-ink/10">
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h3 className="text-ink text-2xl mb-1" style={{ fontWeight: 700 }}>SMS Blast Logs</h3>
-                <p className="text-ink/60 text-sm">Complete audit trail of emergency communications</p>
+                <h3 className="text-ink text-2xl mb-1" style={{ fontWeight: 700 }}>Alert Logs</h3>
+                <p className="text-ink/60 text-sm">Audit trail of every SMS and email alert</p>
               </div>
               <motion.button
                 whileHover={{ scale: 1.05, y: -2 }}
@@ -303,7 +421,7 @@ export function SMSBlastTable() {
                 }}
               >
                 <Send className="text-white" size={20} strokeWidth={2.5} />
-                <span className="text-white text-sm" style={{ fontWeight: 600 }}>Compose New Blast</span>
+                <span className="text-white text-sm" style={{ fontWeight: 600 }}>Compose Alert</span>
               </motion.button>
             </div>
 
@@ -368,11 +486,50 @@ export function SMSBlastTable() {
             </div>
           )}
 
+          {selected.size > 0 && (
+            <div
+              className="mx-8 mt-4 flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-2xl text-sm"
+              style={{ background: 'rgba(var(--ink-rgb), 0.05)', border: '1px solid rgba(var(--ink-rgb), 0.12)' }}
+            >
+              <span className="text-ink" style={{ fontWeight: 600 }}>{selected.size} selected</span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelected(new Set())}
+                  className="px-4 py-1.5 rounded-full text-xs text-ink"
+                  style={{ background: 'rgba(var(--ink-rgb), 0.06)', border: '1px solid rgba(var(--ink-rgb), 0.12)', fontWeight: 600 }}
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setDeleteError(''); setDeleteTarget('selected'); }}
+                  className="flex items-center gap-2 px-4 py-1.5 rounded-full text-xs"
+                  style={{ background: 'rgba(255, 107, 53, 0.12)', border: '1px solid rgba(255, 107, 53, 0.35)', color: '#FF6B35', fontWeight: 700 }}
+                >
+                  <Trash2 size={14} strokeWidth={2.5} />
+                  Delete selected
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Table */}
           <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: '480px' }}>
             <table className="w-full">
               <thead>
                 <tr className="border-b border-ink/10 bg-ink/[0.04]">
+                  <th className="pl-8 pr-0 py-4 w-6">
+                    {deletable.length > 0 && (
+                      <input
+                        type="checkbox"
+                        aria-label="Select all deletable alerts"
+                        checked={allTicked}
+                        onChange={toggleAll}
+                        className="w-4 h-4 cursor-pointer accent-[#2EC4B6]"
+                      />
+                    )}
+                  </th>
                   <th className="text-left px-8 py-4 text-ink/70 text-xs" style={{ fontWeight: 600 }}>BLAST ID</th>
                   <th className="text-left px-8 py-4 text-ink/70 text-xs" style={{ fontWeight: 600 }}>TIMESTAMP</th>
                   <th className="text-left px-8 py-4 text-ink/70 text-xs" style={{ fontWeight: 600 }}>MESSAGE</th>
@@ -387,14 +544,13 @@ export function SMSBlastTable() {
               <tbody>
                 {(loading || loadError || filteredBlasts.length === 0) && (
                   <tr>
-                    <td colSpan={9} className="text-center py-12 text-sm" style={{ color: loadError ? '#ef4444' : 'rgba(var(--ink-rgb), 0.4)' }}>
-                      {loading ? 'Loading blast logs...' : loadError ? `⚠ ${loadError}` : 'No SMS blasts found.'}
+                    <td colSpan={10} className="text-center py-12 text-sm" style={{ color: loadError ? '#ef4444' : 'rgba(var(--ink-rgb), 0.4)' }}>
+                      {loading ? 'Loading alert logs...' : loadError ? `⚠ ${loadError}` : 'No alerts found.'}
                     </td>
                   </tr>
                 )}
                 {!loading && !loadError && filteredBlasts.map((blast, index) => {
                   const levelStyle = getLevelStyle(blast.level);
-                  const statusStyle = getStatusStyle(blast.status);
                   const LevelIcon = levelStyle.icon;
                   return (
                     <motion.tr
@@ -409,6 +565,17 @@ export function SMSBlastTable() {
                         setShowDetailsModal(true);
                       }}
                     >
+                      <td className="pl-8 pr-0 py-4 w-6" onClick={(e) => e.stopPropagation()}>
+                        {canDeleteAlert(blast, role) && (
+                          <input
+                            type="checkbox"
+                            aria-label={`Select alert ${blast.displayId}`}
+                            checked={selected.has(blast.id)}
+                            onChange={() => toggleOne(blast.id)}
+                            className="w-4 h-4 cursor-pointer accent-[#2EC4B6]"
+                          />
+                        )}
+                      </td>
                       <td className="px-8 py-4">
                         <span className="text-ink text-xs" style={{ fontWeight: 700, fontFamily: 'monospace' }}>{blast.displayId}</span>
                       </td>
@@ -420,8 +587,13 @@ export function SMSBlastTable() {
                         <span className="text-[#2EC4B6] text-xs mt-0.5 block" style={{ fontWeight: 600 }}>Click to view full message</span>
                       </td>
                       <td className="px-8 py-4">
-                        <div className="px-3 py-1.5 rounded-full inline-block" style={{ background: 'rgba(var(--ink-rgb), 0.08)', border: '1px solid rgba(var(--ink-rgb), 0.15)' }}>
-                          <span className="text-ink text-xs" style={{ fontWeight: 700 }}>{blast.status === 'Pending' || blast.status === 'Sending' ? '—' : blast.recipients.toLocaleString()}</span>
+                        <div className="flex flex-col items-start gap-1.5">
+                          {channelStatuses(blast).map(({ channel, status, count }) => (
+                            <div key={channel} className="px-3 py-1 rounded-full inline-flex items-center gap-1.5" style={{ background: 'rgba(var(--ink-rgb), 0.08)', border: '1px solid rgba(var(--ink-rgb), 0.15)' }}>
+                              <span className="text-ink/50 text-xs" style={{ fontWeight: 600 }}>{channel === 'sms' ? 'SMS' : 'Email'}</span>
+                              <span className="text-ink text-xs" style={{ fontWeight: 700 }}>{status === 'Pending' || status === 'Sending' ? '—' : count.toLocaleString()}</span>
+                            </div>
+                          ))}
                         </div>
                       </td>
                       <td className="px-8 py-4">
@@ -455,20 +627,21 @@ export function SMSBlastTable() {
                         </div>
                       </td>
                       <td className="px-8 py-4">
-                        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full" style={statusStyle}>
-                          <div className="w-2 h-2 rounded-full" style={{ background: statusStyle.color, animation: blast.status === 'Pending' || blast.status === 'Sending' ? 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none' }} />
-                          <span className="text-xs" style={{ fontWeight: 600 }}>{blast.status}</span>
+                        <div className="flex flex-col items-start gap-1.5">
+                          {channelStatuses(blast).map(({ channel, status }) => (
+                            <ChannelChip key={channel} channel={channel} status={status} />
+                          ))}
                         </div>
                       </td>
                       <td className="px-8 py-4">
                         <span className="text-ink/70 text-xs">{blast.location}</span>
                       </td>
                       <td className="px-8 py-4 text-center">
-                        {blast.status === 'Failed' && (
+                        {canDeleteAlert(blast, role) && (
                           <button
                             type="button"
-                            aria-label={`Delete failed blast ${blast.displayId}`}
-                            title="Delete this failed blast"
+                            aria-label={`Delete alert ${blast.displayId}`}
+                            title="Delete this alert"
                             onClick={(e) => { e.stopPropagation(); setDeleteError(''); setDeleteTarget(blast); }}
                             className="p-2 rounded-xl"
                             style={{ background: 'rgba(255, 107, 53, 0.1)' }}
@@ -493,7 +666,7 @@ export function SMSBlastTable() {
               {failedCount > 0 && (
                 <button
                   type="button"
-                  onClick={() => { setDeleteError(''); setDeleteTarget('all'); }}
+                  onClick={() => { setDeleteError(''); setDeleteTarget('failed'); }}
                   className="flex items-center gap-2 px-4 py-1.5 rounded-full text-xs"
                   style={{ background: 'rgba(255, 107, 53, 0.1)', border: '1px solid rgba(255, 107, 53, 0.3)', color: '#FF6B35', fontWeight: 700 }}
                 >
@@ -534,7 +707,7 @@ export function SMSBlastTable() {
         `}</style>
       </motion.div>
 
-      {/* ===================== DELETE FAILED MODAL ===================== */}
+      {/* ===================== DELETE ALERTS MODAL ===================== */}
       <AnimatePresence>
         {deleteTarget && (
           <>
@@ -567,15 +740,19 @@ export function SMSBlastTable() {
                   </div>
                 </div>
                 <h3 className="text-ink text-xl text-center mb-2" style={{ fontWeight: 700 }}>
-                  {deleteTarget === 'all' ? 'Delete All Failed Blasts' : 'Delete Failed Blast'}
+                  {deleteTarget === 'failed' ? 'Delete All Failed Alerts' : deleteTarget === 'selected' ? 'Delete Selected Alerts' : 'Delete Alert'}
                 </h3>
                 <p className="text-ink/60 text-sm text-center mb-2">
-                  {deleteTarget === 'all'
-                    ? `Delete all ${failedCount} failed blast${failedCount === 1 ? '' : 's'} from the log?`
-                    : `Delete failed blast ${deleteTarget.displayId} from the log?`}
+                  {deleteTarget === 'failed'
+                    ? `Delete all ${failedCount} failed alert${failedCount === 1 ? '' : 's'} from the log?`
+                    : deleteTarget === 'selected'
+                    ? `Delete the ${selected.size} selected alert${selected.size === 1 ? '' : 's'} from the log?`
+                    : `Delete alert ${deleteTarget.displayId} from the log?`}
                 </p>
                 <p className="text-ink/45 text-xs text-center mb-6">
-                  Nothing was delivered for these. Sent and pending blasts are never deleted, and each deletion is recorded in the audit log.
+                  {deliveredInDelete > 0
+                    ? `${deliveredInDelete} of these ${deliveredInDelete === 1 ? 'was' : 'were'} delivered to residents. Deleting only removes the entry from this log; the audit log keeps a record of who sent it and who deleted it.`
+                    : 'Nothing was delivered for these. Each deletion is recorded in the audit log.'}
                 </p>
                 {deleteError && (
                   <p className="text-center mb-3" style={{ color: '#ef4444', fontSize: '13px', fontWeight: 500 }}>⚠ {deleteError}</p>
@@ -609,7 +786,6 @@ export function SMSBlastTable() {
       <AnimatePresence>
         {showDetailsModal && selectedBlast && (() => {
           const levelStyle = getLevelStyle(selectedBlast.level);
-          const statusStyle = getStatusStyle(selectedBlast.status);
           const LevelIcon = levelStyle.icon;
           return (
             <>
@@ -674,9 +850,10 @@ export function SMSBlastTable() {
                     </p>
                   </div>
 
-                  {selectedBlast.errorMessage && (
+                  {(selectedBlast.errorMessage || selectedBlast.emailError) && (
                     <div className="p-3 rounded-2xl mb-5 text-xs" style={{ background: 'rgba(220, 38, 38, 0.08)', border: '1px solid rgba(220, 38, 38, 0.25)', color: '#EF4444', fontWeight: 600 }}>
-                      {selectedBlast.errorMessage}
+                      {selectedBlast.errorMessage && <div>SMS: {selectedBlast.errorMessage}</div>}
+                      {selectedBlast.emailError && <div>Email: {selectedBlast.emailError}</div>}
                     </div>
                   )}
 
@@ -700,9 +877,14 @@ export function SMSBlastTable() {
                         <Users size={14} className="text-ink/40" />
                         <span className="text-ink/50 text-xs" style={{ fontWeight: 600 }}>RECIPIENTS</span>
                       </div>
-                      <p className="text-ink text-sm" style={{ fontWeight: 700 }}>
-                        {selectedBlast.status === 'Pending' || selectedBlast.status === 'Sending' ? 'Not sent yet' : `${selectedBlast.recipients.toLocaleString()} residents`}
-                      </p>
+                      <div className="space-y-0.5">
+                        {channelStatuses(selectedBlast).map(({ channel, status, count }) => (
+                          <p key={channel} className="text-ink text-sm" style={{ fontWeight: 700 }}>
+                            <span className="text-ink/50 text-xs mr-1.5" style={{ fontWeight: 600 }}>{channel === 'sms' ? 'SMS' : 'Email'}</span>
+                            {status === 'Pending' || status === 'Sending' ? 'Not sent yet' : `${count.toLocaleString()} residents`}
+                          </p>
+                        ))}
+                      </div>
                     </div>
 
                     {/* Location */}
@@ -743,9 +925,10 @@ export function SMSBlastTable() {
                     {/* Status */}
                     <div className="p-3 rounded-2xl" style={{ background: 'rgba(var(--ink-rgb), 0.03)', border: '1px solid rgba(var(--ink-rgb), 0.08)' }}>
                       <span className="text-ink/50 text-xs block mb-2" style={{ fontWeight: 600 }}>DELIVERY STATUS</span>
-                      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full" style={statusStyle}>
-                        <div className="w-2 h-2 rounded-full" style={{ background: statusStyle.color }} />
-                        <span className="text-xs" style={{ fontWeight: 600 }}>{selectedBlast.status}</span>
+                      <div className="flex flex-col items-start gap-1.5">
+                        {channelStatuses(selectedBlast).map(({ channel, status }) => (
+                          <ChannelChip key={channel} channel={channel} status={status} />
+                        ))}
                       </div>
                     </div>
 
@@ -803,8 +986,8 @@ export function SMSBlastTable() {
               >
                 <div className="flex items-center justify-between mb-6">
                   <div>
-                    <h3 className="text-ink text-xl" style={{ fontWeight: 700 }}>Compose New Blast</h3>
-                    <p className="text-ink/50 text-sm mt-0.5">Send a manual SMS alert to registered residents</p>
+                    <h3 className="text-ink text-xl" style={{ fontWeight: 700 }}>Compose Alert</h3>
+                    <p className="text-ink/50 text-sm mt-0.5">Send a manual alert by SMS, email, or both</p>
                   </div>
                   <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} onClick={() => setShowComposeModal(false)} className="p-2 rounded-xl" style={{ background: 'rgba(var(--ink-rgb), 0.05)' }}>
                     <X className="text-ink/60" size={20} />
@@ -843,6 +1026,39 @@ export function SMSBlastTable() {
                     </div>
                   </div>
 
+                  {/* Channels */}
+                  <div>
+                    <span className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Send by</span>
+                    <div className="flex gap-3">
+                      {([
+                        { key: 'sms', label: 'SMS', Icon: MessageSquare },
+                        { key: 'email', label: 'Email', Icon: Mail },
+                      ] as const).map(({ key, label, Icon }) => {
+                        const on = channels[key];
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            role="checkbox"
+                            aria-checked={on}
+                            onClick={() => setChannels((c) => ({ ...c, [key]: !c[key] }))}
+                            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs transition-all"
+                            style={{
+                              background: on ? 'rgba(46, 196, 182, 0.15)' : 'rgba(var(--ink-rgb), 0.03)',
+                              border: on ? '1px solid rgba(46, 196, 182, 0.45)' : '1px solid rgba(var(--ink-rgb), 0.1)',
+                              color: on ? '#2EC4B6' : 'rgb(var(--ink-rgb))',
+                              fontWeight: 700,
+                            }}
+                          >
+                            <Icon size={14} strokeWidth={2.5} />
+                            {label}
+                            {on && <span aria-hidden="true">✓</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   {/* Location */}
                   <div>
                     <label htmlFor="blast-location" className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Target Location</label>
@@ -853,13 +1069,21 @@ export function SMSBlastTable() {
                       ))}
                     </select>
                     {newBlast.location && (
-                      <p className="text-xs mt-1.5" style={{ fontWeight: 600, color: recipientCount === 0 ? '#EF4444' : 'rgba(var(--ink-rgb), 0.55)' }}>
-                        {recipientCount === null
-                          ? 'Counting residents...'
-                          : recipientCount === 0
-                          ? 'No active, verified residents here. Add them on the Residents page.'
-                          : `${recipientCount.toLocaleString()} resident${recipientCount === 1 ? '' : 's'} will receive this message.`}
-                      </p>
+                      <div className="mt-1.5 space-y-0.5">
+                        {(['sms', 'email'] as const).filter((k) => channels[k]).map((k) => {
+                          const n = counts[k];
+                          const noun = k === 'sms' ? 'a mobile number' : 'an email';
+                          return (
+                            <p key={k} className="text-xs" style={{ fontWeight: 600, color: n === 0 ? '#EF4444' : 'rgba(var(--ink-rgb), 0.55)' }}>
+                              {n === null
+                                ? `Counting ${k === 'sms' ? 'SMS' : 'email'} recipients...`
+                                : n === 0
+                                ? `No active, verified residents with ${noun} here. Add them on the Residents page.`
+                                : `${n.toLocaleString()} resident${n === 1 ? '' : 's'} will receive this by ${k === 'sms' ? 'SMS' : 'email'}.`}
+                            </p>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
 
@@ -867,24 +1091,43 @@ export function SMSBlastTable() {
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label htmlFor="blast-message" className="block text-ink text-sm" style={{ fontWeight: 600 }}>Message</label>
-                      <span className="text-xs" style={{ color: newBlast.message.length > MAX_CHARS ? '#DC2626' : 'rgb(var(--ink-rgb))', opacity: 0.5, fontWeight: 600 }}>
-                        {newBlast.message.length}/{MAX_CHARS}
+                      <span className="text-xs" style={{ color: newBlast.message.length > counterLimit ? '#DC2626' : 'rgb(var(--ink-rgb))', opacity: 0.5, fontWeight: 600 }}>
+                        {newBlast.message.length}/{counterLimit}
                       </span>
                     </div>
                     <textarea
                       id="blast-message"
-                      maxLength={HARD_LIMIT}
+                      maxLength={messageLimit}
                       placeholder="Type your emergency message here..."
                       value={newBlast.message}
                       onChange={(e) => setNewBlast({ ...newBlast, message: e.target.value })}
                       rows={4}
                       style={{ ...inputStyle, resize: 'none', lineHeight: '1.5' }}
                     />
-                    <p className="text-ink/40 text-xs mt-1">Standard SMS is 160 characters. Longer messages are split into multiple SMS (max {HARD_LIMIT}).</p>
+                    <p className="text-ink/40 text-xs mt-1">
+                      {channels.sms
+                        ? `Standard SMS is 160 characters. Longer messages are split into multiple SMS (max ${HARD_LIMIT}).`
+                        : `Emails can be up to ${EMAIL_LIMIT} characters.`}
+                    </p>
                   </div>
 
+                  {/* Email subject */}
+                  {channels.email && (
+                    <div>
+                      <label htmlFor="blast-subject" className="block text-ink text-sm mb-1.5" style={{ fontWeight: 600 }}>Email subject (optional)</label>
+                      <input
+                        id="blast-subject"
+                        maxLength={150}
+                        placeholder="Leave blank for an automatic subject"
+                        value={subject}
+                        onChange={(e) => setSubject(e.target.value)}
+                        style={inputStyle}
+                      />
+                    </div>
+                  )}
+
                   {/* Preview */}
-                  {newBlast.message && (
+                  {newBlast.message && channels.sms && (
                     <div className="p-4 rounded-2xl" style={{ background: 'rgba(var(--ink-rgb), 0.03)', border: '1px solid rgba(var(--ink-rgb), 0.08)' }}>
                       <p className="text-ink/50 text-xs mb-1" style={{ fontWeight: 600 }}>SMS PREVIEW</p>
                       <p className="text-ink text-sm">[FloodSense] {newBlast.message}</p>
@@ -909,12 +1152,12 @@ export function SMSBlastTable() {
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={handleSendBlast}
-                    disabled={sending || recipientCount === 0}
+                    disabled={sending || (!channels.sms && !channels.email) || (countsReady && reach === 0)}
                     className="flex-1 py-3 rounded-2xl text-sm text-white flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                     style={{ background: 'linear-gradient(135deg, #2EC4B6 0%, #1fa299 100%)', boxShadow: '0 8px 24px rgba(46, 196, 182, 0.4)', fontWeight: 600 }}
                   >
                     <Send size={16} strokeWidth={2.5} />
-                    {sending ? 'Sending...' : recipientCount ? `Send to ${recipientCount.toLocaleString()}` : 'Send Blast'}
+                    {sending ? 'Sending...' : 'Send alert'}
                   </motion.button>
                 </div>
               </div>

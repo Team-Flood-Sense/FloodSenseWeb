@@ -31,7 +31,7 @@ export function GlassmorphicSidebar() {
     { icon: LayoutDashboard, label: "Dashboard", path: "/", roles: ["admin", "operator", "viewer"] },
     { icon: Activity, label: "Sensor Status", path: "/sensors", roles: ["admin", "operator", "viewer"] },
     { icon: Users, label: "User Management", path: "/users", roles: ["admin"] },
-    { icon: MessageSquare, label: "SMS Blast Logs", path: "/sms-logs", roles: ["admin", "operator"] },
+    { icon: MessageSquare, label: "Alert Logs", path: "/sms-logs", roles: ["admin", "operator"] },
     { icon: Contact, label: "Residents", path: "/residents", roles: ["admin", "operator"] },
   ];
 

@@ -2,7 +2,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { AlertTriangle, Circle, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { ALL_RESIDENTS, getGatewayConfigured, sendBlast, type BlastOutcome } from '@/lib/sms';
+import { ALL_RESIDENTS, getGatewayStatus, sendBlast, summarizeResult, type BlastResult, type Channel } from '@/lib/alerts';
 import { useEscape } from '@/app/hooks/useEscape';
 
 const EVACUATION_MESSAGE =
@@ -14,16 +14,18 @@ export function QuickActionsPanel() {
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [triggerError, setTriggerError] = useState('');
-  const [outcome, setOutcome] = useState<BlastOutcome | null>(null);
-  const [gateway, setGateway] = useState<boolean | null>(null);
+  const [result, setResult] = useState<BlastResult | null>(null);
+  const [gateway, setGateway] = useState<Record<Channel, boolean | null>>({ sms: null, email: null });
   const successTimer = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => () => clearTimeout(successTimer.current), []);
 
-  // Is the SMS gateway set up? (only staff can send, so only they check)
+  // Are the SMS and email gateways set up? (only staff can send, so only they check)
   useEffect(() => {
-    if (role === 'admin' || role === 'operator') getGatewayConfigured().then(setGateway);
+    if (role === 'admin' || role === 'operator') getGatewayStatus().then(setGateway);
   }, [role]);
+
+  const summary = result ? summarizeResult(result) : null;
 
   const closeConfirm = useCallback(() => {
     setShowConfirmModal(false);
@@ -31,17 +33,24 @@ export function QuickActionsPanel() {
   }, []);
   useEscape(showConfirmModal, closeConfirm);
 
-  // Saves the alarm as a CRITICAL SMS blast and sends it to every active, verified resident.
+  // Saves the alarm as a CRITICAL blast and sends it by SMS and email to every active, verified resident.
   async function handleConfirm() {
     setTriggering(true);
     setTriggerError('');
     try {
-      const result = await sendBlast({ message: EVACUATION_MESSAGE, level: 'CRITICAL', location: ALL_RESIDENTS });
-      setOutcome(result);
+      const outcome = await sendBlast({
+        message: EVACUATION_MESSAGE,
+        level: 'CRITICAL',
+        location: ALL_RESIDENTS,
+        sms: true,
+        email: true,
+        subject: '[FloodSense] CRITICAL: Evacuation alarm',
+      });
+      setResult(outcome);
       setShowConfirmModal(false);
       setShowSuccessModal(true);
-      // Leave failures on screen longer so they are not missed
-      successTimer.current = setTimeout(() => setShowSuccessModal(false), result.kind === 'sent' ? 6000 : 15000);
+      // Leave problems on screen longer so they are not missed
+      successTimer.current = setTimeout(() => setShowSuccessModal(false), summarizeResult(outcome).tone === 'success' ? 6000 : 20000);
     } catch (err) {
       setTriggerError((err as Error).message);
     } finally {
@@ -111,8 +120,8 @@ export function QuickActionsPanel() {
                 </p>
                 <ul className="space-y-1.5">
                   {[
-                    'Send a CRITICAL evacuation SMS to all active, verified residents',
-                    'Record the alert in the SMS Blast Logs',
+                    'Send a CRITICAL evacuation alert by SMS and email to all active, verified residents',
+                    'Record the alert in the Alert Logs',
                   ].map((item) => (
                     <li key={item} className="flex items-start gap-2 text-ink/70 text-sm">
                       <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-ink/40 flex-shrink-0" />
@@ -147,20 +156,28 @@ export function QuickActionsPanel() {
               </div>
               <p className="text-ink/50 text-xs ml-5">Live sensor status will appear here</p>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <Circle
-                  className={gateway ? 'text-green-500 fill-green-500' : gateway === false ? 'text-[#FFB84D] fill-[#FFB84D]' : 'text-gray-400 fill-gray-400'}
-                  size={12}
-                />
-                <span className="text-ink text-sm" style={{ fontWeight: 600 }}>
-                  {gateway ? 'SMS gateway: ready' : gateway === false ? 'SMS gateway: not set up' : 'SMS gateway: checking...'}
-                </span>
-              </div>
-              <p className="text-ink/50 text-xs ml-5">
-                {gateway === false ? 'Blasts are saved as Pending until the Semaphore key is added' : 'Alerts are sent through Semaphore'}
-              </p>
-            </div>
+            {(['sms', 'email'] as const).map((ch) => {
+              const state = gateway[ch];
+              const name = ch === 'sms' ? 'SMS gateway' : 'Email service';
+              return (
+                <div key={ch}>
+                  <div className="flex items-center gap-2">
+                    <Circle
+                      className={state ? 'text-green-500 fill-green-500' : state === false ? 'text-[#FFB84D] fill-[#FFB84D]' : 'text-gray-400 fill-gray-400'}
+                      size={12}
+                    />
+                    <span className="text-ink text-sm" style={{ fontWeight: 600 }}>
+                      {state ? `${name}: ready` : state === false ? `${name}: not set up` : `${name}: checking...`}
+                    </span>
+                  </div>
+                  <p className="text-ink/50 text-xs ml-5">
+                    {state === false
+                      ? `${ch === 'sms' ? 'SMS' : 'Emails'} are saved as Pending until ${ch === 'sms' ? 'the Semaphore key' : 'Gmail or Brevo'} is set up`
+                      : `${ch === 'sms' ? 'SMS' : 'Emails'} are sent through ${ch === 'sms' ? 'Semaphore' : 'the configured email provider'}`}
+                  </p>
+                </div>
+              );
+            })}
           </div>
         </div>
       </motion.div>
@@ -224,7 +241,7 @@ export function QuickActionsPanel() {
                   Confirm Evacuation Alarm
                 </h3>
                 <p className="text-ink/60 text-sm text-center mb-4">
-                  This immediately sends a CRITICAL evacuation SMS to every active, verified resident and records it in the SMS Blast Logs.
+                  This immediately sends a CRITICAL evacuation alert by SMS and email to every active, verified resident and records it in the Alert Logs.
                 </p>
 
                 {/* Warning note */}
@@ -317,23 +334,19 @@ export function QuickActionsPanel() {
                 >
                   <div
                     className="p-4 rounded-2xl"
-                    style={{ background: outcome?.kind === 'sent' ? 'rgba(46, 196, 182, 0.1)' : outcome?.kind === 'failed' ? 'rgba(220, 38, 38, 0.1)' : 'rgba(255, 184, 77, 0.14)' }}
+                    style={{ background: summary?.tone === 'success' ? 'rgba(46, 196, 182, 0.1)' : summary?.tone === 'error' ? 'rgba(220, 38, 38, 0.1)' : 'rgba(255, 184, 77, 0.14)' }}
                   >
-                    {outcome?.kind === 'sent'
+                    {summary?.tone === 'success'
                       ? <Circle className="text-[#2EC4B6] fill-[#2EC4B6]" size={36} />
-                      : <AlertTriangle className={outcome?.kind === 'failed' ? 'text-[#DC2626]' : 'text-[#FFB84D]'} size={36} />}
+                      : <AlertTriangle className={summary?.tone === 'error' ? 'text-[#DC2626]' : 'text-[#FFB84D]'} size={36} />}
                   </div>
                 </motion.div>
 
                 <h3 className="text-ink text-xl mb-2" style={{ fontWeight: 700 }}>
-                  {outcome?.kind === 'sent' ? 'Alarm Sent' : outcome?.kind === 'failed' ? 'Alarm Failed' : 'Alarm Not Sent'}
+                  {summary?.tone === 'success' ? 'Alarm Sent' : summary?.tone === 'error' ? 'Alarm Failed' : 'Alarm Needs Attention'}
                 </h3>
                 <p className="text-ink/60 text-sm mb-2">
-                  {outcome?.kind === 'sent'
-                    ? `Evacuation SMS sent to ${outcome.recipients.toLocaleString()} resident${outcome.recipients === 1 ? '' : 's'}.${outcome.warning ? ' ' + outcome.warning : ''}`
-                    : outcome?.kind === 'failed'
-                    ? outcome.error
-                    : `${outcome?.reason ?? ''} It was saved as Pending in the SMS Blast Logs.`}
+                  {summary?.text}
                 </p>
                 <button
                   type="button"
