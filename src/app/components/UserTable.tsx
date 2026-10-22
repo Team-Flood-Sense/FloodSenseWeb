@@ -294,7 +294,7 @@ export function UserTable() {
                   User Management
                 </h3>
                 <p className="text-ink/60 text-sm">
-                  Manage team members and permissions
+                  Staff accounts only (admins, operators, viewers). Residents are managed on the Residents page.
                 </p>
               </div>
               <motion.button

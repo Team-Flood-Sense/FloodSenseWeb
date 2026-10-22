@@ -148,9 +148,9 @@ export function ResidentsTable() {
   const fetchResidents = useCallback(async () => {
     const all: Resident[] = [];
     for (let from = 0; ; from += PAGE) {
+      // Residents only: staff accounts are filtered out in the database
       const { data, error } = await supabase
-        .from('residents')
-        .select('*')
+        .rpc('list_residents')
         .order('created_at', { ascending: false })
         .range(from, from + PAGE - 1);
       if (error) {
@@ -220,7 +220,13 @@ export function ResidentsTable() {
     });
     setBusy(false);
     if (error) {
-      setModalError(error.code === '23505' ? 'This number or email is already in the list.' : 'Failed to add the resident. Please try again.');
+      setModalError(
+        error.message?.includes('staff account')
+          ? 'That email belongs to a staff account. Staff are managed in User Management, not here.'
+          : error.code === '23505'
+          ? 'This number or email is already in the list.'
+          : 'Failed to add the resident. Please try again.',
+      );
       return;
     }
     closeModals();
@@ -247,7 +253,7 @@ export function ResidentsTable() {
     const skipped = parsed.valid.length - added;
     closeModals();
     setImportText('');
-    setNotice(`Imported ${added} resident${added === 1 ? '' : 's'}${skipped > 0 ? ` (${skipped} already in the list were skipped)` : ''}.`);
+    setNotice(`Imported ${added} resident${added === 1 ? '' : 's'}${skipped > 0 ? ` (${skipped} already in the list, or staff accounts, were skipped)` : ''}.`);
     fetchResidents();
   }
 
@@ -291,7 +297,7 @@ export function ResidentsTable() {
             <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
               <div>
                 <h3 className="text-ink text-2xl mb-1" style={{ fontWeight: 700 }}>Residents</h3>
-                <p className="text-ink/60 text-sm">People who receive SMS and email alerts. Only active, verified residents are contacted.</p>
+                <p className="text-ink/60 text-sm">People who receive SMS and email alerts. Only active, verified residents are contacted. Staff accounts are managed in User Management, not here.</p>
               </div>
               <div className="flex gap-3">
                 <button
