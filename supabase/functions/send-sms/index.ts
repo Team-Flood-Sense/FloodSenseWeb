@@ -28,6 +28,16 @@ function json(body: unknown, status = 200) {
   });
 }
 
+// Staff accounts (the profiles table) never receive resident alerts
+async function loadStaff(admin: any) {
+  const { data } = await admin.from("profiles").select("id, email");
+  const rows = (data ?? []) as { id: string; email: string | null }[];
+  return {
+    ids: new Set(rows.map((p) => p.id)),
+    emails: new Set(rows.map((p) => String(p.email ?? "").toLowerCase()).filter(Boolean)),
+  };
+}
+
 // The token has already been validated by auth.getUser(); this only reads claims.
 function tokenClaims(token: string): Record<string, unknown> {
   try {
@@ -115,20 +125,25 @@ Deno.serve(async (req) => {
 
   try {
     // --- Recipients: active, verified residents for the chosen area -----------
+    const staff = await loadStaff(admin);
     const phones = new Set<string>();
     for (let from = 0; phones.size < MAX_RECIPIENTS; from += 1000) {
       let q = admin
         .from("residents")
-        .select("phone")
+        .select("id, phone, email")
         .eq("is_active", true)
         .eq("is_verified", true)
+        .not("phone", "is", null)
         .order("id")
         .range(from, from + 999);
       if (blast.location !== ALL_RESIDENTS) q = q.eq("area", blast.location);
 
       const { data, error } = await q;
       if (error) throw new Error(`Could not load residents: ${error.message}`);
-      (data ?? []).forEach((r: { phone: string }) => phones.add(r.phone));
+      (data ?? []).forEach((r: { id: string; phone: string; email: string | null }) => {
+        if (staff.ids.has(r.id) || (r.email && staff.emails.has(r.email.toLowerCase()))) return;
+        phones.add(r.phone);
+      });
       if (!data || data.length < 1000) break;
     }
 

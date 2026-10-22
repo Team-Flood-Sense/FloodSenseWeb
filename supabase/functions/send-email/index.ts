@@ -52,6 +52,16 @@ function tokenClaims(token: string): Record<string, unknown> {
   }
 }
 
+// Staff accounts (the profiles table) never receive resident alerts
+async function loadStaff(admin: any) {
+  const { data } = await admin.from("profiles").select("id, email");
+  const rows = (data ?? []) as { id: string; email: string | null }[];
+  return {
+    ids: new Set(rows.map((p) => p.id)),
+    emails: new Set(rows.map((p) => String(p.email ?? "").toLowerCase()).filter(Boolean)),
+  };
+}
+
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
@@ -181,11 +191,12 @@ Deno.serve(async (req) => {
 
   try {
     // --- Recipients: active, verified residents with an email in the chosen area
+    const staff = await loadStaff(admin);
     const emails = new Set<string>();
     for (let from = 0; emails.size < MAX_RECIPIENTS; from += 1000) {
       let q = admin
         .from("residents")
-        .select("email")
+        .select("id, email")
         .eq("is_active", true)
         .eq("is_verified", true)
         .not("email", "is", null)
@@ -195,7 +206,10 @@ Deno.serve(async (req) => {
 
       const { data, error } = await q;
       if (error) throw new Error(`Could not load residents: ${error.message}`);
-      (data ?? []).forEach((r: { email: string }) => emails.add(r.email));
+      (data ?? []).forEach((r: { id: string; email: string }) => {
+        if (staff.ids.has(r.id) || staff.emails.has(r.email.toLowerCase())) return;
+        emails.add(r.email);
+      });
       if (!data || data.length < 1000) break;
     }
 

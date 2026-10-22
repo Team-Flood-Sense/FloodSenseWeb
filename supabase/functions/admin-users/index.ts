@@ -105,6 +105,8 @@ Deno.serve(async (req) => {
       email,
       password,
       email_confirm: true,
+      // app_metadata can only be set by this server code, so residents can never mark themselves staff
+      app_metadata: { kind: "staff" },
       user_metadata: { name, phone: body.phone ?? "", location: body.location ?? "" },
     });
     if (error) {
@@ -115,12 +117,22 @@ Deno.serve(async (req) => {
       return json({ error: error.message }, 400);
     }
 
-    // The handle_new_user trigger created the profile as an Inactive viewer;
-    // set the real role and activate it. Roll back the account on failure.
+    // Write the staff profile explicitly (the sign-up trigger may or may not have created it).
+    // Roll back the account on failure.
     const { error: profileError } = await admin
       .from("profiles")
-      .update({ role, status: "Active" })
-      .eq("id", data.user.id);
+      .upsert(
+        {
+          id: data.user.id,
+          email,
+          name,
+          phone: String(body.phone ?? ""),
+          location: String(body.location ?? ""),
+          role,
+          status: "Active",
+        },
+        { onConflict: "id" },
+      );
     if (profileError) {
       await admin.auth.admin.deleteUser(data.user.id);
       return json({ error: profileError.message }, 500);

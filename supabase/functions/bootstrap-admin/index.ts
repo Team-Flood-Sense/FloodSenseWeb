@@ -58,6 +58,8 @@ Deno.serve(async (req) => {
     email,
     password,
     email_confirm: true,
+    // app_metadata can only be set by this server code, so residents can never mark themselves staff
+    app_metadata: { kind: "staff" },
     user_metadata: { name, phone: body.phone ?? "", location: body.location ?? "" },
   });
   if (error) {
@@ -67,6 +69,22 @@ Deno.serve(async (req) => {
     }
     return json({ error: error.message }, 400);
   }
+
+  // Make sure a profile row exists (the sign-up trigger may or may not have created it)
+  await admin
+    .from("profiles")
+    .upsert(
+      {
+        id: data.user.id,
+        email,
+        name,
+        phone: String(body.phone ?? ""),
+        location: String(body.location ?? ""),
+        role: "viewer",
+        status: "Inactive",
+      },
+      { onConflict: "id", ignoreDuplicates: true },
+    );
 
   // Atomically make this user the first admin (fails if someone beat us to it).
   const { data: claimed, error: claimError } = await admin.rpc("claim_first_admin", {
