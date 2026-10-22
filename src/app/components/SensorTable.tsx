@@ -1,5 +1,5 @@
 import { motion } from 'motion/react';
-import { Droplets, Waves, Wind, Thermometer, Battery, BatteryLow, BatteryMedium, BatteryFull } from 'lucide-react';
+import { Droplets, Waves, Wind, Thermometer, Radio, BatteryLow, BatteryMedium, BatteryFull } from 'lucide-react';
 
 export interface Sensor {
   id: string;
@@ -12,69 +12,9 @@ export interface Sensor {
   lastSync: string;
 }
 
-// Placeholder data until the sensors table is connected
-export const sensorData: Sensor[] = [
-  {
-    id: '001',
-    name: 'Water Level Sensor 001',
-    type: 'water',
-    location: 'District A - River Bridge',
-    status: 'online',
-    reading: '0.6m',
-    battery: 95,
-    lastSync: '2 min ago',
-  },
-  {
-    id: '002',
-    name: 'Rainfall Monitor 045',
-    type: 'rainfall',
-    location: 'District B - Central Park',
-    status: 'online',
-    reading: '27.8 mm/hr',
-    battery: 78,
-    lastSync: '1 min ago',
-  },
-  {
-    id: '003',
-    name: 'Water Level Sensor 012',
-    type: 'water',
-    location: 'District C - Dam Site',
-    status: 'warning',
-    reading: '1.2m',
-    battery: 45,
-    lastSync: '5 min ago',
-  },
-  {
-    id: '004',
-    name: 'Wind Speed Monitor 028',
-    type: 'wind',
-    location: 'District A - Hilltop',
-    status: 'online',
-    reading: '12 km/h',
-    battery: 88,
-    lastSync: '3 min ago',
-  },
-  {
-    id: '005',
-    name: 'Temperature Sensor 056',
-    type: 'temperature',
-    location: 'District D - Industrial Zone',
-    status: 'offline',
-    reading: '--',
-    battery: 12,
-    lastSync: '2 hours ago',
-  },
-  {
-    id: '006',
-    name: 'Rainfall Monitor 067',
-    type: 'rainfall',
-    location: 'District B - Airport',
-    status: 'online',
-    reading: '18.4 mm/hr',
-    battery: 92,
-    lastSync: '1 min ago',
-  },
-];
+// No sensors are connected yet, so the list is empty. When real sensors report in, load them here
+// (for example from a `sensors` table) and the stat cards and table below fill in by themselves.
+export const sensorData: Sensor[] = [];
 
 const getSensorIcon = (type: string) => {
   switch (type) {
@@ -131,7 +71,21 @@ export function SensorTable() {
           </p>
         </div>
 
-        {/* Table */}
+        {sensorData.length === 0 ? (
+          <div className="flex flex-col items-center justify-center text-center px-6 py-16">
+            <div
+              className="p-5 rounded-3xl mb-5"
+              style={{ background: 'rgba(var(--ink-rgb), 0.05)', border: '1px dashed rgba(var(--ink-rgb), 0.22)' }}
+            >
+              <Radio className="text-ink/40" size={40} strokeWidth={1.8} />
+            </div>
+            <h4 className="text-ink text-lg" style={{ fontWeight: 700 }}>No sensors connected yet</h4>
+            <p className="text-ink/55 text-sm mt-2 max-w-md">
+              Water level and rainfall sensors will appear here once they are registered and start sending
+              readings. Nothing is shown until real data arrives.
+            </p>
+          </div>
+        ) : (
         <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: '480px' }}>
           <table className="w-full">
             <thead>
@@ -296,6 +250,7 @@ export function SensorTable() {
             </tbody>
           </table>
         </div>
+        )}
       </div>
 
       <style>{`
