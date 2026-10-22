@@ -101,4 +101,5 @@ alter table public.sms_blasts add column if not exists error_message text;
 alter table public.sms_blasts drop constraint if exists sms_blasts_status_check;
 alter table public.sms_blasts
   add constraint sms_blasts_status_check
-  check (status in ('Pending', 'Sending', 'Sent', 'Delivered', 'Failed'));
+  check (status in ('Pending', 'Sending', 'Sent', 'Delivered', 'Failed'))
+  not valid;  -- applies to new/changed rows only, so replaying this file never trips on newer statuses

@@ -88,7 +88,8 @@ alter table public.sms_blasts
 alter table public.sms_blasts drop constraint if exists sms_blasts_status_check;
 alter table public.sms_blasts
   add constraint sms_blasts_status_check
-  check (status in ('Pending', 'Sending', 'Sent', 'Delivered', 'Failed', 'Skipped'));
+  check (status in ('Pending', 'Sending', 'Sent', 'Delivered', 'Failed', 'Skipped'))
+  not valid;  -- validated at the end of 20261015000003_app_integration.sql
 
 alter table public.sms_blasts drop constraint if exists sms_blasts_email_status_check;
 alter table public.sms_blasts
@@ -97,7 +98,7 @@ alter table public.sms_blasts
 
 alter table public.sms_blasts drop constraint if exists sms_blasts_channel_check;
 alter table public.sms_blasts
-  add constraint sms_blasts_channel_check check (send_sms or send_email);
+  add constraint sms_blasts_channel_check check (send_sms or send_email) not valid;  -- replaced in 20261015000003
 
 alter table public.sms_blasts drop constraint if exists sms_blasts_subject_check;
 alter table public.sms_blasts
