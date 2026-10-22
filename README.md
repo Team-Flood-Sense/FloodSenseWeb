@@ -57,16 +57,26 @@ Supabase → Authentication → Users, then set it up again on next sign-in.
 ## SMS and email alerts
 
 Staff (admin/operator) manage recipients on the **Residents** page: each resident can have a mobile
-number, an email, or both. When composing an alert, tick **SMS**, **Email** or both. The alert is
+number, an email, or both. When composing an alert, tick **SMS**, **Email**, **App** or any mix. The alert is
 saved in the **Alert Logs** and then sent by the `send-sms` (Semaphore) and/or `send-email` (Brevo)
 function to every *active, verified* resident in the chosen area who has that contact detail. The
-evacuation alarm always uses both channels.
+evacuation alarm always uses all three channels.
+The **App** channel adds the alert to the mobile app's alert list (its `alerts` table), and the app's own
+trigger pushes it to every registered phone (not per area).
 
 Each channel has its own status in the log: `Pending` -> `Sending` -> `Sent` (or `Failed`).
 If a provider's key isn't set, that channel stays `Pending` and nothing is sent on it.
 `Sent` means the provider accepted the messages; delivery receipts are not tracked yet.
 Alerts can be deleted from the log (tick rows for bulk delete). Admins can delete any alert that isn't
 mid-send; operators only alerts where nothing was delivered. Deletions are kept in the audit log.
+
+## Website and mobile app share one project
+
+- Residents who register in the app are saved in the same `residents` table. The database keeps the
+  app's columns (`full_name`, `phone_number`) and the website's (`name`, `phone`) in step, and merges an
+  app registration into a resident staff already added (same email or phone) instead of rejecting it.
+- Only accounts created on the website (User Management or `/setup`) get a staff profile. Do not add
+  staff through the Supabase dashboard's "Add user"; they would have no profile.
 
 ## Not connected yet
 
