@@ -7,9 +7,11 @@ export const DEFAULT_AREA = 'Barangay Pamplona 3';
 export const SMS_AREAS = [ALL_RESIDENTS, DEFAULT_AREA];
 
 export type BlastLevel = 'INFO' | 'WARNING' | 'CRITICAL';
-export type Channel = 'sms' | 'email';
+export type Channel = 'sms' | 'email' | 'app';
+/** Channels delivered by an Edge Function (the app channel is handled inside the database). */
+type ServerChannel = 'sms' | 'email';
 
-export const CHANNEL_LABEL: Record<Channel, string> = { sms: 'SMS', email: 'Email' };
+export const CHANNEL_LABEL: Record<Channel, string> = { sms: 'SMS', email: 'Email', app: 'App' };
 
 export type BlastOutcome =
   /** The provider accepted the messages. `warning` is set when some were rejected. */
@@ -48,16 +50,10 @@ export const isValidEmail = (raw: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(r
 // ── Recipients and gateway status ──────────────────────────────
 
 /** Number of active, verified residents a blast to `area` would reach on `channel`. */
-export async function countRecipients(area: string, channel: Channel): Promise<number | null> {
-  let q = supabase
-    .from('residents')
-    .select('id', { count: 'exact', head: true })
-    .eq('is_active', true)
-    .eq('is_verified', true)
-    .not(channel === 'sms' ? 'phone' : 'email', 'is', null);
-  if (area !== ALL_RESIDENTS) q = q.eq('area', area);
-  const { count, error } = await q;
-  return error ? null : count ?? 0;
+export async function countRecipients(area: string, channel: ServerChannel): Promise<number | null> {
+  // Done in the database so staff accounts are never counted
+  const { data, error } = await supabase.rpc('count_alert_recipients', { p_area: area, p_channel: channel });
+  return error ? null : (data as number | null) ?? 0;
 }
 
 async function isConfigured(fn: 'send-sms' | 'send-email'): Promise<boolean | null> {
@@ -67,15 +63,21 @@ async function isConfigured(fn: 'send-sms' | 'send-email'): Promise<boolean | nu
 }
 
 /** Whether each gateway is set up. null = could not tell (function missing or unreachable). */
-export async function getGatewayStatus(): Promise<Record<Channel, boolean | null>> {
+/** Number of phones registered for the mobile app's push notifications (staff only). */
+export async function countAppDevices(): Promise<number | null> {
+  const { data, error } = await supabase.rpc('count_app_devices');
+  return error ? null : (data as number | null) ?? 0;
+}
+
+export async function getGatewayStatus(): Promise<Record<ServerChannel, boolean | null>> {
   const [sms, email] = await Promise.all([isConfigured('send-sms'), isConfigured('send-email')]);
   return { sms, email };
 }
 
 // ── Sending ────────────────────────────────────────────────────
 
-const FUNCTION: Record<Channel, 'send-sms' | 'send-email'> = { sms: 'send-sms', email: 'send-email' };
-const GATEWAY: Record<Channel, string> = { sms: 'SMS gateway', email: 'email service' };
+const FUNCTION: Record<ServerChannel, 'send-sms' | 'send-email'> = { sms: 'send-sms', email: 'send-email' };
+const GATEWAY: Record<ServerChannel, string> = { sms: 'SMS gateway', email: 'email service' };
 
 async function errorBody(error: unknown): Promise<{ status: number; message: string; code?: string }> {
   if (error instanceof FunctionsHttpError) {
@@ -90,7 +92,7 @@ async function errorBody(error: unknown): Promise<{ status: number; message: str
   return { status: 0, message: 'Could not reach the server. Check your connection.' };
 }
 
-async function sendChannel(channel: Channel, blastId: string): Promise<BlastOutcome> {
+async function sendChannel(channel: ServerChannel, blastId: string): Promise<BlastOutcome> {
   const { data, error } = await supabase.functions.invoke(FUNCTION[channel], { body: { blast_id: blastId } });
 
   if (error) {
@@ -117,8 +119,31 @@ export interface BlastInput {
   location: string;
   sms: boolean;
   email: boolean;
+  /** Also add the alert to the mobile app's alert list and push it to registered phones. */
+  app?: boolean;
   /** Email subject; a sensible default is generated when empty. */
   subject?: string;
+}
+
+/** The App channel runs inside the database; read back how it went. */
+async function appOutcome(blastId: string): Promise<BlastOutcome> {
+  const { data, error } = await supabase
+    .from('sms_blasts')
+    .select('app_status, app_recipients, app_error')
+    .eq('id', blastId)
+    .single();
+  if (error || !data) return { kind: 'pending', reason: 'Could not confirm that the app notification was queued.' };
+  if (data.app_status === 'Failed') {
+    return { kind: 'failed', error: data.app_error || 'The app notification could not be created.' };
+  }
+  if (data.app_status === 'Sent') {
+    return {
+      kind: 'sent',
+      recipients: data.app_recipients ?? 0,
+      warning: data.app_recipients ? undefined : 'no phones have notifications enabled yet, but it appears in the app',
+    };
+  }
+  return { kind: 'pending', reason: 'The app notification is still being queued.' };
 }
 
 /**
@@ -126,7 +151,7 @@ export interface BlastInput {
  * Throws only if the blast could not even be saved.
  */
 export async function sendBlast(input: BlastInput): Promise<BlastResult> {
-  if (!input.sms && !input.email) throw new Error('Select at least one channel (SMS or Email).');
+  if (!input.sms && !input.email && !input.app) throw new Error('Select at least one channel (SMS, Email or App).');
 
   // The sender, statuses and source are stamped by the database.
   const { data: blast, error: insertError } = await supabase
@@ -137,19 +162,21 @@ export async function sendBlast(input: BlastInput): Promise<BlastResult> {
       location: input.location,
       send_sms: input.sms,
       send_email: input.email,
+      send_app: Boolean(input.app),
       email_subject: input.email ? input.subject?.trim() || null : null,
     })
     .select('id')
     .single();
   if (insertError || !blast) throw new Error('Failed to save the blast. Please try again.');
 
-  const channels = (['sms', 'email'] as Channel[]).filter((c) => input[c]);
+  const channels = (['sms', 'email'] as ServerChannel[]).filter((c) => input[c]);
   const outcomes = await Promise.all(channels.map((c) => sendChannel(c, blast.id)));
 
   const result: BlastResult = {};
   channels.forEach((c, i) => {
     result[c] = outcomes[i];
   });
+  if (input.app) result.app = await appOutcome(blast.id);
   return result;
 }
 
@@ -166,7 +193,8 @@ export function summarizeResult(result: BlastResult): { tone: 'success' | 'warn'
     const o = result[c]!;
     const label = CHANNEL_LABEL[c];
     if (o.kind === 'sent') {
-      parts.push(`${label}: sent to ${o.recipients.toLocaleString()}${o.warning ? ` (${o.warning})` : ''}`);
+      const unit = c === 'app' ? ` phone${o.recipients === 1 ? '' : 's'}` : '';
+      parts.push(`${label}: sent to ${o.recipients.toLocaleString()}${unit}${o.warning ? ` (${o.warning})` : ''}`);
       bump(o.warning ? 'warn' : 'success');
     } else if (o.kind === 'pending') {
       parts.push(`${label}: saved as Pending. ${o.reason}`);

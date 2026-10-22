@@ -7,7 +7,7 @@ const PAGES: Record<string, { title: string; subtitle: string }> = {
   '/': { title: 'Dashboard', subtitle: 'Flood monitoring overview' },
   '/sensors': { title: 'Sensor Status', subtitle: 'Station health and readings' },
   '/users': { title: 'User Management', subtitle: 'Team members and permissions' },
-  '/sms-logs': { title: 'Alert Logs', subtitle: 'SMS and email alert trail' },
+  '/sms-logs': { title: 'Alert Logs', subtitle: 'SMS, email and app alert trail' },
   '/residents': { title: 'Residents', subtitle: 'SMS and email recipients' },
 };
 

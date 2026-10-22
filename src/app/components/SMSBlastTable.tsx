@@ -1,8 +1,8 @@
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Calendar, Send, Cpu, User, AlertCircle, Info, AlertTriangle, X, MapPin, Clock, Users, Trash2, Mail, MessageSquare } from 'lucide-react';
+import { Search, Calendar, Send, Cpu, User, AlertCircle, Info, AlertTriangle, X, MapPin, Clock, Users, Trash2, Mail, MessageSquare, Smartphone } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { SMS_AREAS, countRecipients, sendBlast, summarizeResult, type BlastLevel, type Channel } from '@/lib/alerts';
+import { CHANNEL_LABEL, SMS_AREAS, countAppDevices, countRecipients, sendBlast, summarizeResult, type BlastLevel, type Channel } from '@/lib/alerts';
 import { useEscape } from '@/app/hooks/useEscape';
 import { useAuth } from '@/context/AuthContext';
 
@@ -25,6 +25,10 @@ interface SMSBlast {
   emailStatus: 'Pending' | 'Sending' | 'Sent' | 'Failed' | null;
   emailRecipients: number;
   emailError: string | null;
+  sendApp: boolean;
+  appStatus: 'Pending' | 'Sent' | 'Failed' | null;
+  appRecipients: number;
+  appError: string | null;
 }
 
 const MAX_CHARS = 160;
@@ -57,6 +61,10 @@ function toBlast(row: any): SMSBlast {
     emailStatus: row.email_status ?? null,
     emailRecipients: row.email_recipients ?? 0,
     emailError: row.email_error ?? null,
+    sendApp: row.send_app ?? false,
+    appStatus: row.app_status ?? null,
+    appRecipients: row.app_recipients ?? 0,
+    appError: row.app_error ?? null,
   };
 }
 
@@ -65,12 +73,15 @@ function channelStatuses(b: SMSBlast): { channel: Channel; status: string; count
   const list: { channel: Channel; status: string; count: number }[] = [];
   if (b.sendSms) list.push({ channel: 'sms', status: b.status, count: b.recipients });
   if (b.sendEmail && b.emailStatus) list.push({ channel: 'email', status: b.emailStatus, count: b.emailRecipients });
+  if (b.sendApp && b.appStatus) list.push({ channel: 'app', status: b.appStatus, count: b.appRecipients });
   return list;
 }
 
 /** Nothing reached anyone on any channel the blast used, so it is safe to delete. */
 const isAllFailed = (b: SMSBlast) =>
-  (b.status === 'Failed' || b.status === 'Skipped') && (b.emailStatus === null || b.emailStatus === 'Failed');
+  (b.status === 'Failed' || b.status === 'Skipped') &&
+  (b.emailStatus === null || b.emailStatus === 'Failed') &&
+  (b.appStatus === null || b.appStatus === 'Failed');
 
 /**
  * Admins can delete any alert that isn't mid-send; operators only alerts where nothing was
@@ -144,13 +155,13 @@ const getStatusStyle = (status: string) => {
 
 function ChannelChip({ channel, status }: { channel: Channel; status: string }) {
   const style = getStatusStyle(status);
-  const Icon = channel === 'sms' ? MessageSquare : Mail;
+  const Icon = channel === 'sms' ? MessageSquare : channel === 'email' ? Mail : Smartphone;
   const busy = status === 'Pending' || status === 'Sending';
   return (
     <div
       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full"
       style={style}
-      title={`${channel === 'sms' ? 'SMS' : 'Email'}: ${status}`}
+      title={`${CHANNEL_LABEL[channel]}: ${status}`}
     >
       <Icon size={12} strokeWidth={2.5} />
       <span className="text-xs" style={{ fontWeight: 600, animation: busy ? 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none' }}>
@@ -168,8 +179,8 @@ export function SMSBlastTable() {
   const [loadError, setLoadError] = useState('');
   const [sending, setSending] = useState(false);
   const [composeError, setComposeError] = useState('');
-  const [counts, setCounts] = useState<{ sms: number | null; email: number | null }>({ sms: null, email: null });
-  const [channels, setChannels] = useState<{ sms: boolean; email: boolean }>({ sms: true, email: false });
+  const [counts, setCounts] = useState<{ sms: number | null; email: number | null; app: number | null }>({ sms: null, email: null, app: null });
+  const [channels, setChannels] = useState<{ sms: boolean; email: boolean; app: boolean }>({ sms: true, email: false, app: false });
   const [subject, setSubject] = useState('');
   const [notice, setNotice] = useState<{ tone: 'success' | 'warn' | 'error'; text: string } | null>(null);
 
@@ -287,13 +298,17 @@ export function SMSBlastTable() {
 
   useEffect(() => {
     if (!showComposeModal || !newBlast.location) {
-      setCounts({ sms: null, email: null });
+      setCounts({ sms: null, email: null, app: null });
       return;
     }
     let cancelled = false;
-    setCounts({ sms: null, email: null });
-    Promise.all([countRecipients(newBlast.location, 'sms'), countRecipients(newBlast.location, 'email')]).then(([sms, email]) => {
-      if (!cancelled) setCounts({ sms, email });
+    setCounts({ sms: null, email: null, app: null });
+    Promise.all([
+      countRecipients(newBlast.location, 'sms'),
+      countRecipients(newBlast.location, 'email'),
+      countAppDevices(),
+    ]).then(([sms, email, app]) => {
+      if (!cancelled) setCounts({ sms, email, app });
     });
     return () => {
       cancelled = true;
@@ -328,8 +343,8 @@ export function SMSBlastTable() {
   async function handleSendBlast() {
     setComposeError('');
     const message = newBlast.message.trim();
-    if (!channels.sms && !channels.email) {
-      setComposeError('Select at least one channel: SMS or Email.');
+    if (!channels.sms && !channels.email && !channels.app) {
+      setComposeError('Select at least one channel: SMS, Email or App.');
       return;
     }
     if (!newBlast.location) {
@@ -361,6 +376,7 @@ export function SMSBlastTable() {
         location: newBlast.location,
         sms: channels.sms,
         email: channels.email,
+        app: channels.app,
         subject,
       });
       setShowComposeModal(false);
@@ -407,7 +423,7 @@ export function SMSBlastTable() {
             <div className="flex items-center justify-between mb-6">
               <div>
                 <h3 className="text-ink text-2xl mb-1" style={{ fontWeight: 700 }}>Alert Logs</h3>
-                <p className="text-ink/60 text-sm">Audit trail of every SMS and email alert</p>
+                <p className="text-ink/60 text-sm">Audit trail of every SMS, email and app alert</p>
               </div>
               <motion.button
                 whileHover={{ scale: 1.05, y: -2 }}
@@ -590,7 +606,7 @@ export function SMSBlastTable() {
                         <div className="flex flex-col items-start gap-1.5">
                           {channelStatuses(blast).map(({ channel, status, count }) => (
                             <div key={channel} className="px-3 py-1 rounded-full inline-flex items-center gap-1.5" style={{ background: 'rgba(var(--ink-rgb), 0.08)', border: '1px solid rgba(var(--ink-rgb), 0.15)' }}>
-                              <span className="text-ink/50 text-xs" style={{ fontWeight: 600 }}>{channel === 'sms' ? 'SMS' : 'Email'}</span>
+                              <span className="text-ink/50 text-xs" style={{ fontWeight: 600 }}>{CHANNEL_LABEL[channel]}</span>
                               <span className="text-ink text-xs" style={{ fontWeight: 700 }}>{status === 'Pending' || status === 'Sending' ? '—' : count.toLocaleString()}</span>
                             </div>
                           ))}
@@ -850,10 +866,11 @@ export function SMSBlastTable() {
                     </p>
                   </div>
 
-                  {(selectedBlast.errorMessage || selectedBlast.emailError) && (
+                  {(selectedBlast.errorMessage || selectedBlast.emailError || selectedBlast.appError) && (
                     <div className="p-3 rounded-2xl mb-5 text-xs" style={{ background: 'rgba(220, 38, 38, 0.08)', border: '1px solid rgba(220, 38, 38, 0.25)', color: '#EF4444', fontWeight: 600 }}>
                       {selectedBlast.errorMessage && <div>SMS: {selectedBlast.errorMessage}</div>}
                       {selectedBlast.emailError && <div>Email: {selectedBlast.emailError}</div>}
+                      {selectedBlast.appError && <div>App: {selectedBlast.appError}</div>}
                     </div>
                   )}
 
@@ -880,8 +897,8 @@ export function SMSBlastTable() {
                       <div className="space-y-0.5">
                         {channelStatuses(selectedBlast).map(({ channel, status, count }) => (
                           <p key={channel} className="text-ink text-sm" style={{ fontWeight: 700 }}>
-                            <span className="text-ink/50 text-xs mr-1.5" style={{ fontWeight: 600 }}>{channel === 'sms' ? 'SMS' : 'Email'}</span>
-                            {status === 'Pending' || status === 'Sending' ? 'Not sent yet' : `${count.toLocaleString()} residents`}
+                            <span className="text-ink/50 text-xs mr-1.5" style={{ fontWeight: 600 }}>{CHANNEL_LABEL[channel]}</span>
+                            {status === 'Pending' || status === 'Sending' ? 'Not sent yet' : `${count.toLocaleString()} ${channel === 'app' ? 'phones' : 'residents'}`}
                           </p>
                         ))}
                       </div>
@@ -987,7 +1004,7 @@ export function SMSBlastTable() {
                 <div className="flex items-center justify-between mb-6">
                   <div>
                     <h3 className="text-ink text-xl" style={{ fontWeight: 700 }}>Compose Alert</h3>
-                    <p className="text-ink/50 text-sm mt-0.5">Send a manual alert by SMS, email, or both</p>
+                    <p className="text-ink/50 text-sm mt-0.5">Send a manual alert by SMS, email, app notification, or any mix</p>
                   </div>
                   <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} onClick={() => setShowComposeModal(false)} className="p-2 rounded-xl" style={{ background: 'rgba(var(--ink-rgb), 0.05)' }}>
                     <X className="text-ink/60" size={20} />
@@ -1033,6 +1050,7 @@ export function SMSBlastTable() {
                       {([
                         { key: 'sms', label: 'SMS', Icon: MessageSquare },
                         { key: 'email', label: 'Email', Icon: Mail },
+                        { key: 'app', label: 'App', Icon: Smartphone },
                       ] as const).map(({ key, label, Icon }) => {
                         const on = channels[key];
                         return (
@@ -1070,16 +1088,21 @@ export function SMSBlastTable() {
                     </select>
                     {newBlast.location && (
                       <div className="mt-1.5 space-y-0.5">
-                        {(['sms', 'email'] as const).filter((k) => channels[k]).map((k) => {
+                        {(['sms', 'email', 'app'] as const).filter((k) => channels[k]).map((k) => {
                           const n = counts[k];
+                          const bad = n === 0 && k !== 'app';
                           const noun = k === 'sms' ? 'a mobile number' : 'an email';
                           return (
-                            <p key={k} className="text-xs" style={{ fontWeight: 600, color: n === 0 ? '#EF4444' : 'rgba(var(--ink-rgb), 0.55)' }}>
+                            <p key={k} className="text-xs" style={{ fontWeight: 600, color: bad ? '#EF4444' : 'rgba(var(--ink-rgb), 0.55)' }}>
                               {n === null
-                                ? `Counting ${k === 'sms' ? 'SMS' : 'email'} recipients...`
+                                ? `Counting ${CHANNEL_LABEL[k]} recipients...`
+                                : k === 'app'
+                                ? n === 0
+                                  ? 'No phones have app notifications enabled yet. The alert will still appear in the app.'
+                                  : `${n.toLocaleString()} phone${n === 1 ? '' : 's'} will get an app notification (all registered phones, not just this area).`
                                 : n === 0
                                 ? `No active, verified residents with ${noun} here. Add them on the Residents page.`
-                                : `${n.toLocaleString()} resident${n === 1 ? '' : 's'} will receive this by ${k === 'sms' ? 'SMS' : 'email'}.`}
+                                : `${n.toLocaleString()} resident${n === 1 ? '' : 's'} will receive this by ${CHANNEL_LABEL[k]}.`}
                             </p>
                           );
                         })}
@@ -1152,7 +1175,7 @@ export function SMSBlastTable() {
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={handleSendBlast}
-                    disabled={sending || (!channels.sms && !channels.email) || (countsReady && reach === 0)}
+                    disabled={sending || (!channels.sms && !channels.email && !channels.app) || (countsReady && reach === 0 && !channels.app)}
                     className="flex-1 py-3 rounded-2xl text-sm text-white flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                     style={{ background: 'linear-gradient(135deg, #2EC4B6 0%, #1fa299 100%)', boxShadow: '0 8px 24px rgba(46, 196, 182, 0.4)', fontWeight: 600 }}
                   >
