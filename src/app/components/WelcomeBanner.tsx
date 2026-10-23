@@ -11,7 +11,8 @@ function greeting() {
 
 export function WelcomeBanner() {
   const { profile, role } = useAuth();
-  const firstName = (profile?.name || 'there').split(' ')[0];
+  const rawName = (profile?.name || 'there').split(' ')[0];
+  const firstName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
 
   return (
     <motion.div
@@ -21,29 +22,25 @@ export function WelcomeBanner() {
       className="relative overflow-hidden p-8"
       style={{
         borderRadius: '28px',
-        background: 'linear-gradient(120deg, #0B3C5D 0%, #1D70A2 58%, #2EC4B6 130%)',
-        boxShadow: '0 16px 44px rgba(var(--shadow-rgb), 0.22), inset 0 1px 2px rgba(255, 255, 255, 0.18)',
-        border: '1px solid rgba(255, 255, 255, 0.14)',
+        background: '#1E6FA8',
+        boxShadow: '0 8px 24px rgba(var(--shadow-rgb), 0.14)',
+        border: '1px solid rgba(255, 255, 255, 0.08)',
       }}
     >
-      {/* Decorative rings */}
-      <div className="absolute -right-16 -top-24 w-72 h-72 rounded-full pointer-events-none" style={{ border: '1px solid rgba(255,255,255,0.14)' }} />
-      <div className="absolute -right-4 -top-12 w-48 h-48 rounded-full pointer-events-none" style={{ border: '1px solid rgba(255,255,255,0.12)', background: 'radial-gradient(circle, rgba(46,196,182,0.22), transparent 70%)' }} />
-
       {/* Decorative waves */}
       <svg className="absolute bottom-0 left-0 w-full h-16 pointer-events-none" viewBox="0 0 1440 100" preserveAspectRatio="none" aria-hidden="true">
-        <path d="M0,60 Q240,20 480,55 T960,50 T1440,45 L1440,100 L0,100 Z" fill="rgba(255,255,255,0.07)" />
-        <path d="M0,75 Q300,45 600,72 T1200,68 T1440,70 L1440,100 L0,100 Z" fill="rgba(255,255,255,0.06)" />
+        <path d="M0,60 Q240,20 480,55 T960,50 T1440,45 L1440,100 L0,100 Z" fill="rgba(255,255,255,0.04)" />
+        <path d="M0,75 Q300,45 600,72 T1200,68 T1440,70 L1440,100 L0,100 Z" fill="rgba(255,255,255,0.03)" />
       </svg>
 
       <div className="relative z-10 flex flex-wrap items-center justify-between gap-6">
         <div className="min-w-0">
           <p className="text-white/70 text-sm" style={{ fontWeight: 600 }}>{greeting()},</p>
           <h1 className="text-white text-3xl mt-0.5 truncate" style={{ fontWeight: 800, letterSpacing: '-0.015em' }}>
-            {firstName} 👋
+            {firstName}
           </h1>
           <p className="text-white/75 text-sm mt-2 max-w-xl">
-            Here's the flood-monitoring overview for Barangay Pamplona 3. Keep an eye on the water level and rainfall below.
+            Flood-monitoring overview for Barangay Pamplona 3.
           </p>
         </div>
 
@@ -56,7 +53,7 @@ export function WelcomeBanner() {
             <span
               key={text}
               className="inline-flex items-center gap-2 px-4 h-9 rounded-full text-white text-xs"
-              style={{ background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)', fontWeight: 600 }}
+              style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.16)', fontWeight: 600 }}
             >
               <Icon size={14} />
               {text}
