@@ -3,8 +3,14 @@ import { MetricCard } from '../components/MetricCard';
 import { GeospatialMonitor } from '../components/GeospatialMonitor';
 import { QuickActionsPanel } from '../components/QuickActionsPanel';
 import { WelcomeBanner } from '../components/WelcomeBanner';
+import { useSensors } from '../hooks/useSensors';
 
 export function Dashboard() {
+  const { sensors } = useSensors();
+  // Highest reading among water-level sensors that are currently reporting
+  const live = sensors.filter((s) => s.type === 'water' && s.status !== 'offline' && s.value !== null);
+  const water = live.length ? live.reduce((a, b) => ((b.value ?? 0) > (a.value ?? 0) ? b : a)) : null;
+
   return (
     <div className="flex-1 space-y-6 pb-2">
       <WelcomeBanner />
@@ -21,8 +27,8 @@ export function Dashboard() {
         <MetricCard
           icon={Droplets}
           title="Water Level"
-          value="0.6"
-          unit="m"
+          value={water ? String(water.value) : '—'}
+          unit={water ? water.unit : undefined}
           showWaveAnimation={true}
           accent="#0EA5E9"
         />

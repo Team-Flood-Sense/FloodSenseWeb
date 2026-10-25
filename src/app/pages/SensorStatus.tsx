@@ -1,8 +1,10 @@
 import { Radio, CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
 import { StatCard } from '../components/StatCard';
-import { SensorTable, sensorData } from '../components/SensorTable';
+import { SensorTable } from '../components/SensorTable';
+import { useSensors } from '../hooks/useSensors';
 
 export function SensorStatus() {
+  const { sensors: sensorData, error } = useSensors();
   // Counts come from the same data as the table so they always agree
   const count = (status: string) => sensorData.filter((s) => s.status === status).length;
 
@@ -44,7 +46,7 @@ export function SensorStatus() {
       </div>
 
       {/* Main Table */}
-      <SensorTable />
+      <SensorTable sensors={sensorData} error={error} />
     </div>
   );
 }

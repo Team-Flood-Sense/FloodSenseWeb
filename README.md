@@ -46,6 +46,18 @@ React + Vite frontend with a Supabase backend (Auth, Postgres, Realtime, Edge Fu
 A user who loses their authenticator can have their MFA factor removed in
 Supabase → Authentication → Users, then set it up again on next sign-in.
 
+## Sensors (ESP32 / ESP8266)
+
+1. Run `supabase/migrations/20261024000000_sensors.sql` in the SQL Editor (already included in `setup-all.sql`).
+2. Get the device key: `select ingest_key from public.sensor_settings;`
+3. In `firmware/floodsense_sensor/`, copy `secrets.example.h` to `secrets.h` and fill in Wi-Fi, the Supabase
+   URL and publishable key, and the device key. Set `MOUNT_HEIGHT_CM` in the `.ino`, then flash it with the Arduino IDE.
+4. The sensor registers itself on its first reading and appears on **Sensor Status** and the Dashboard's
+   Water Level card within seconds. It shows *Offline* after 2 minutes of silence and *Warning* at or above its
+   `warn_level` (default 30 cm; edit in the `sensors` table).
+
+Set `SIMULATE_READINGS` to `1` to send fake readings and test the website with no sensor attached.
+
 ## Roles
 
 | Role     | Access                                                      |

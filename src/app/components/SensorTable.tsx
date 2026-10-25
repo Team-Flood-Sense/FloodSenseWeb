@@ -1,20 +1,6 @@
 import { motion } from 'motion/react';
 import { Droplets, Waves, Wind, Thermometer, Radio, BatteryLow, BatteryMedium, BatteryFull } from 'lucide-react';
-
-export interface Sensor {
-  id: string;
-  name: string;
-  type: 'water' | 'rainfall' | 'wind' | 'temperature';
-  location: string;
-  status: 'online' | 'warning' | 'offline';
-  reading: string;
-  battery: number;
-  lastSync: string;
-}
-
-// No sensors are connected yet, so the list is empty. When real sensors report in, load them here
-// (for example from a `sensors` table) and the stat cards and table below fill in by themselves.
-export const sensorData: Sensor[] = [];
+import type { Sensor } from '../hooks/useSensors';
 
 const getSensorIcon = (type: string) => {
   switch (type) {
@@ -43,7 +29,7 @@ const getBatteryColor = (level: number) => {
   return '#FF6B35';
 };
 
-export function SensorTable() {
+export function SensorTable({ sensors: sensorData, error }: { sensors: Sensor[]; error?: string | null }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -81,8 +67,9 @@ export function SensorTable() {
             </div>
             <h4 className="text-ink text-lg" style={{ fontWeight: 700 }}>No sensors connected yet</h4>
             <p className="text-ink/55 text-sm mt-2 max-w-md">
-              Water level and rainfall sensors will appear here once they are registered and start sending
-              readings. Nothing is shown until real data arrives.
+              {error
+                ? `Couldn't load sensors: ${error}`
+                : 'Water level and rainfall sensors will appear here once they start sending readings. Nothing is shown until real data arrives.'}
             </p>
           </div>
         ) : (
@@ -113,8 +100,9 @@ export function SensorTable() {
             <tbody>
               {sensorData.map((sensor, index) => {
                 const SensorIcon = getSensorIcon(sensor.type);
-                const BatteryIcon = getBatteryIcon(sensor.battery);
-                const batteryColor = getBatteryColor(sensor.battery);
+                const battery = sensor.battery ?? 0;
+                const BatteryIcon = getBatteryIcon(battery);
+                const batteryColor = sensor.battery === null ? '#94A3B8' : getBatteryColor(battery);
                 
                 return (
                   <motion.tr
@@ -222,7 +210,7 @@ export function SensorTable() {
                               color: batteryColor,
                             }}
                           >
-                            {sensor.battery}%
+                            {sensor.battery === null ? '—' : `${sensor.battery}%`}
                           </span>
                           <div 
                             className="w-16 h-1 rounded-full overflow-hidden"
@@ -231,7 +219,7 @@ export function SensorTable() {
                             <div 
                               className="h-full rounded-full"
                               style={{ 
-                                width: `${sensor.battery}%`,
+                                width: `${battery}%`,
                                 background: batteryColor,
                               }}
                             />
