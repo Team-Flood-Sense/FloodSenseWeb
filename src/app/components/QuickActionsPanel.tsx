@@ -4,12 +4,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { ALL_RESIDENTS, countAppDevices, getGatewayStatus, sendBlast, summarizeResult, type BlastResult } from '@/lib/alerts';
 import { useEscape } from '@/app/hooks/useEscape';
+import { useSensors } from '@/app/hooks/useSensors';
 
 const EVACUATION_MESSAGE =
   'CRITICAL ALERT: Manual evacuation alarm triggered by FloodSense Command Center. Evacuate to the nearest evacuation center immediately.';
 
 export function QuickActionsPanel() {
   const { role } = useAuth();
+  const { sensors, loading: sensorsLoading } = useSensors();
+  const onlineSensors = sensors.filter((s) => s.status !== 'offline').length;
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [triggering, setTriggering] = useState(false);
@@ -154,12 +157,33 @@ export function QuickActionsPanel() {
           <div className="space-y-3">
             <div>
               <div className="flex items-center gap-2">
-                <Circle className="text-gray-400 fill-gray-400" size={12} />
+                <Circle
+                  className={
+                    sensorsLoading
+                      ? 'text-gray-400 fill-gray-400'
+                      : onlineSensors > 0
+                        ? 'text-green-500 fill-green-500'
+                        : sensors.length > 0
+                          ? 'text-red-500 fill-red-500'
+                          : 'text-gray-400 fill-gray-400'
+                  }
+                  size={12}
+                />
                 <span className="text-ink text-sm" style={{ fontWeight: 600 }}>
-                  Sensor feed: not connected
+                  {sensorsLoading
+                    ? 'Sensor feed: checking...'
+                    : sensors.length === 0
+                      ? 'Sensor feed: not connected'
+                      : `Sensor feed: ${onlineSensors} of ${sensors.length} online`}
                 </span>
               </div>
-              <p className="text-ink/50 text-xs ml-5">Live sensor status will appear here</p>
+              <p className="text-ink/50 text-xs ml-5">
+                {sensors.length === 0 && !sensorsLoading
+                  ? 'Live sensor status will appear here'
+                  : onlineSensors === 0 && !sensorsLoading
+                    ? 'No sensor has reported in the last 2 minutes'
+                    : 'Sensors are reporting live'}
+              </p>
             </div>
             {(['sms', 'email'] as const).map((ch) => {
               const state = gateway[ch];

@@ -10,6 +10,7 @@ export interface Sensor {
   reading: string;
   value: number | null;
   unit: string;
+  warnLevel: number;
   battery: number | null;
   lastSync: string;
 }
@@ -53,6 +54,7 @@ function toSensor(row: SensorRow, now: number): Sensor {
     reading: value === null ? '—' : `${value} ${row.unit}`,
     value,
     unit: row.unit,
+    warnLevel: Number(row.warn_level),
     battery: row.battery,
     lastSync: Number.isFinite(age) ? timeAgo(age) : 'Never',
   };
