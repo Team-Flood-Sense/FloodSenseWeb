@@ -56,6 +56,15 @@ Supabase → Authentication → Users, then set it up again on next sign-in.
    Water Level card within seconds. It shows *Offline* after 2 minutes of silence and *Warning* at or above its
    `warn_level` (default 30 cm; edit in the `sensors` table).
 
+### Analytics reports
+
+The **Analytics** tab builds weekly, monthly and yearly flood reports (filter by area, sensor and level; export
+CSV or print/save as PDF). Run `supabase/migrations/20261026000000_sensor_daily_stats.sql` first: raw readings are
+kept for only 7 days, so every reading also updates a per-day summary (`sensor_daily_stats`) that the reports use.
+A day counts as *Warning* / *Danger* when a sensor's peak reaches its `warn_level` / `danger_level` (defaults
+30 / 60 cm). Reports only cover time since sensors started reporting. Admins can clear test data with
+`delete from public.sensor_daily_stats;`.
+
 Set `SIMULATE_READINGS` to `1` to send fake readings and test the website with no sensor attached.
 
 ## Roles

@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   LayoutDashboard,
   Activity,
+  BarChart3,
   LogOut,
   Waves,
   Users,
@@ -30,6 +31,7 @@ export function GlassmorphicSidebar() {
   const allMenuItems = [
     { icon: LayoutDashboard, label: "Dashboard", path: "/", roles: ["admin", "operator", "viewer"] },
     { icon: Activity, label: "Sensor Status", path: "/sensors", roles: ["admin", "operator", "viewer"] },
+    { icon: BarChart3, label: "Analytics", path: "/analytics", roles: ["admin", "operator", "viewer"] },
     { icon: Users, label: "User Management", path: "/users", roles: ["admin"] },
     { icon: MessageSquare, label: "Alert Logs", path: "/sms-logs", roles: ["admin", "operator"] },
     { icon: Contact, label: "Residents", path: "/residents", roles: ["admin", "operator"] },

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Droplets, Shield, TrendingUp } from 'lucide-react';
 import { MetricCard } from '../components/MetricCard';
 import { GeospatialMonitor } from '../components/GeospatialMonitor';
@@ -18,10 +19,11 @@ export function Dashboard() {
         : sensors.every((s) => s.status === 'offline')
           ? { label: 'Offline', accent: '#DC2626' }
           : { label: 'Optimal', accent: '#2EC4B6' };
-  // Highest reading among water-level sensors that are currently reporting
-  const live = sensors.filter((s) => s.type === 'water' && s.status !== 'offline' && s.value !== null);
-  const water = live.length ? live.reduce((a, b) => ((b.value ?? 0) > (a.value ?? 0) ? b : a)) : null;
-  const forecast = useFloodForecast(water);
+  // The sensor shown in the Water Level and Forecast cards: the one clicked on the map, else the first
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = sensors.find((s) => s.id === selectedId) ?? sensors.find((s) => s.type === 'water') ?? null;
+  const water = selected && selected.status !== 'offline' && selected.value !== null ? selected : null;
+  const forecast = useFloodForecast(selected);
   const forecastAccent = { ok: '#2EC4B6', warn: '#FFB84D', danger: '#FF6B35', none: '#94A3B8' };
 
   return (
@@ -39,7 +41,7 @@ export function Dashboard() {
         />
         <MetricCard
           icon={Droplets}
-          title="Water Level"
+          title={selected ? `Water Level · ${selected.name}` : 'Water Level'}
           value={water ? String(water.value) : '—'}
           unit={water ? water.unit : undefined}
           showWaveAnimation={true}
@@ -57,7 +59,7 @@ export function Dashboard() {
       {/* Main Monitor and Actions */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="xl:col-span-2">
-          <GeospatialMonitor />
+          <GeospatialMonitor sensors={sensors} selectedId={selected?.id ?? null} onSelect={setSelectedId} />
         </div>
         <div>
           <QuickActionsPanel />

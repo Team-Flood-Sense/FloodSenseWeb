@@ -11,6 +11,9 @@ export interface Sensor {
   value: number | null;
   unit: string;
   warnLevel: number;
+  lat: number | null;
+  lng: number | null;
+  dangerLevel: number;
   battery: number | null;
   lastSync: string;
 }
@@ -28,6 +31,9 @@ interface SensorRow {
   unit: string;
   battery: number | null;
   warn_level: number;
+  lat: number | null;
+  lng: number | null;
+  danger_level: number;
   last_seen: string | null;
 }
 
@@ -55,6 +61,9 @@ function toSensor(row: SensorRow, now: number): Sensor {
     value,
     unit: row.unit,
     warnLevel: Number(row.warn_level),
+    dangerLevel: Number(row.danger_level),
+    lat: typeof row.lat === 'number' ? row.lat : null,
+    lng: typeof row.lng === 'number' ? row.lng : null,
     battery: row.battery,
     lastSync: Number.isFinite(age) ? timeAgo(age) : 'Never',
   };
