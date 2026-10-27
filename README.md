@@ -38,7 +38,7 @@ React + Vite frontend with a Supabase backend (Auth, Postgres, Realtime, Edge Fu
      recipients/day; residents are sent a BCC copy so they can't see each other's addresses.
    - **Brevo**: create a free [Brevo](https://www.brevo.com) account, verify a sender or
      authenticate a domain, then set `BREVO_API_KEY` and `EMAIL_SENDER_EMAIL`.
-   Gmail is used when both Gmail secrets exist; otherwise Brevo. `EMAIL_SENDER_NAME` is optional.
+   Gmail is used when both Gmail secrets exist; otherwise Brevo. `EMAIL_SENDER_NAME` is optional (defaults to "BDRRMO Pamplona Tres").
 6. **First admin**: open the app at `/setup` (Sign In shows a link while no admin exists).
    Fill in name, email and password; the account is created in Supabase Auth and `profiles`,
    and you're taken to authenticator-app setup. `/setup` closes permanently once an admin exists.

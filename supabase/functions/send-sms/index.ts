@@ -153,7 +153,7 @@ Deno.serve(async (req) => {
     }
 
     // --- Send through Semaphore in batches --------------------------------------
-    const text = `[FloodSense] ${blast.message}`;
+    const text = `[BDRRMO Pamplona Tres] ${blast.message}`;
     const senderName = Deno.env.get("SEMAPHORE_SENDER_NAME");
     const list = [...phones];
     let accepted = 0;
