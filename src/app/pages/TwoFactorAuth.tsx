@@ -59,6 +59,8 @@ export function TwoFactorAuth() {
       const { data: enrolled, error: enrollError } = await supabase.auth.mfa.enroll({
         factorType: "totp",
         friendlyName: `FloodSense ${new Date().toISOString()}`,
+        // The name shown in the authenticator app (otherwise it shows the site address, e.g. "localhost")
+        issuer: "FloodSense",
       });
       if (cancelled) return;
       if (enrollError) {

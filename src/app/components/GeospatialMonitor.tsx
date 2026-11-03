@@ -75,13 +75,13 @@ const WAVES_GLYPH = 'M2 9c2-2.5 4-2.5 6 0s4 2.5 6 0 4-2.5 8 0v3c-4-2.5-6-2.5-8 0
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-/** Sensor marker: colour follows its status; the selected one is larger with a ring and a name label. */
+/** Sensor marker: legend blue (red only for a warning, faded when offline); the selected one is larger with a ring and a name label. */
 function sensorIcon(s: Sensor, selected: boolean): L.DivIcon {
-  const color = SENSOR_COLORS[s.status];
+  const color = s.status === 'warning' ? SENSOR_COLORS.warning : SENSOR_COLORS.online;
   return L.divIcon({
     className: '',
     html: `
-      <div style="position:relative;width:50px;height:50px;${selected ? 'transform:scale(1.18);' : ''}">
+      <div style="position:relative;width:50px;height:50px;${selected ? 'transform:scale(1.18);' : ''}${s.status === 'offline' ? 'opacity:0.6;' : ''}">
         ${s.status !== 'offline' ? `<div style="position:absolute;inset:0;border-radius:50%;background:${color};opacity:0.3;animation:markerPulse 1.8s ease-out infinite;"></div>` : ''}
         <div style="position:absolute;top:8px;left:8px;width:34px;height:34px;background:${color};border:3px solid white;border-radius:50%;
           box-shadow:${selected ? `0 0 0 4px ${color}88, ` : ''}0 4px 15px ${color}99;display:flex;align-items:center;justify-content:center;">

@@ -2,7 +2,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { AlertTriangle, Circle, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { ALL_RESIDENTS, countAppDevices, getGatewayStatus, sendBlast, summarizeResult, type BlastResult } from '@/lib/alerts';
+import { ALL_RESIDENTS, getGatewayStatus, sendBlast, summarizeResult, type BlastResult } from '@/lib/alerts';
 import { useEscape } from '@/app/hooks/useEscape';
 import { useSensors } from '@/app/hooks/useSensors';
 
@@ -19,7 +19,6 @@ export function QuickActionsPanel() {
   const [triggerError, setTriggerError] = useState('');
   const [result, setResult] = useState<BlastResult | null>(null);
   const [gateway, setGateway] = useState<{ sms: boolean | null; email: boolean | null }>({ sms: null, email: null });
-  const [devices, setDevices] = useState<number | null>(null);
   const successTimer = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => () => clearTimeout(successTimer.current), []);
@@ -28,7 +27,6 @@ export function QuickActionsPanel() {
   useEffect(() => {
     if (role === 'admin' || role === 'operator') {
       getGatewayStatus().then(setGateway);
-      countAppDevices().then(setDevices);
     }
   }, [role]);
 
@@ -51,7 +49,7 @@ export function QuickActionsPanel() {
         location: ALL_RESIDENTS,
         sms: true,
         email: true,
-        app: true,
+        app: false,
         subject: '[FloodSense] CRITICAL: Evacuation alarm',
       });
       setResult(outcome);
@@ -128,7 +126,7 @@ export function QuickActionsPanel() {
                 </p>
                 <ul className="space-y-1.5">
                   {[
-                    'Send a CRITICAL evacuation alert by SMS and email to all active, verified residents, plus an app notification',
+                    'Send a CRITICAL evacuation alert by SMS and email to all active, verified residents',
                     'Record the alert in the Alert Logs',
                   ].map((item) => (
                     <li key={item} className="flex items-start gap-2 text-ink/70 text-sm">
@@ -207,22 +205,6 @@ export function QuickActionsPanel() {
                 </div>
               );
             })}
-            {(role === 'admin' || role === 'operator') && (
-              <div>
-                <div className="flex items-center gap-2">
-                  <Circle
-                    className={devices ? 'text-green-500 fill-green-500' : devices === 0 ? 'text-[#FFB84D] fill-[#FFB84D]' : 'text-gray-400 fill-gray-400'}
-                    size={12}
-                  />
-                  <span className="text-ink text-sm" style={{ fontWeight: 600 }}>
-                    {devices === null ? 'Mobile app: checking...' : `Mobile app: ${devices} phone${devices === 1 ? '' : 's'} registered`}
-                  </span>
-                </div>
-                <p className="text-ink/50 text-xs ml-5">
-                  {devices === 0 ? 'No phones have enabled notifications yet' : 'App notifications go to every registered phone'}
-                </p>
-              </div>
-            )}
           </div>
         </div>
       </motion.div>
@@ -286,7 +268,7 @@ export function QuickActionsPanel() {
                   Confirm Evacuation Alarm
                 </h3>
                 <p className="text-ink/60 text-sm text-center mb-4">
-                  This immediately sends a CRITICAL evacuation alert by SMS and email to every active, verified resident, pushes it to the mobile app, and records it in the Alert Logs.
+                  This immediately sends a CRITICAL evacuation alert by SMS and email to every active, verified resident and records it in the Alert Logs.
                 </p>
 
                 {/* Warning note */}
