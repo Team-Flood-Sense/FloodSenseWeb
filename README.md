@@ -38,13 +38,34 @@ React + Vite frontend with a Supabase backend (Auth, Postgres, Realtime, Edge Fu
      recipients/day; residents are sent a BCC copy so they can't see each other's addresses.
    - **Brevo**: create a free [Brevo](https://www.brevo.com) account, verify a sender or
      authenticate a domain, then set `BREVO_API_KEY` and `EMAIL_SENDER_EMAIL`.
-   Gmail is used when both Gmail secrets exist; otherwise Brevo. `EMAIL_SENDER_NAME` is optional.
+   Gmail is used when both Gmail secrets exist; otherwise Brevo. `EMAIL_SENDER_NAME` is optional (defaults to "BDRRMO Pamplona Tres").
 6. **First admin**: open the app at `/setup` (Sign In shows a link while no admin exists).
    Fill in name, email and password; the account is created in Supabase Auth and `profiles`,
    and you're taken to authenticator-app setup. `/setup` closes permanently once an admin exists.
 
 A user who loses their authenticator can have their MFA factor removed in
 Supabase → Authentication → Users, then set it up again on next sign-in.
+
+## Sensors (ESP32 / ESP8266)
+
+1. Run `supabase/migrations/20261024000000_sensors.sql` in the SQL Editor (already included in `setup-all.sql`).
+2. Get the device key: `select ingest_key from public.sensor_settings;`
+3. In `firmware/floodsense_sensor/`, copy `secrets.example.h` to `secrets.h` and fill in Wi-Fi, the Supabase
+   URL and publishable key, and the device key. Set `MOUNT_HEIGHT_CM` in the `.ino`, then flash it with the Arduino IDE.
+4. The sensor registers itself on its first reading and appears on **Sensor Status** and the Dashboard's
+   Water Level card within seconds. It shows *Offline* after 2 minutes of silence and *Warning* at or above its
+   `warn_level` (default 30 cm; edit in the `sensors` table).
+
+### Analytics reports
+
+The **Analytics** tab builds weekly, monthly and yearly flood reports (filter by area, sensor and level; export
+CSV or print/save as PDF). Run `supabase/migrations/20261026000000_sensor_daily_stats.sql` first: raw readings are
+kept for only 7 days, so every reading also updates a per-day summary (`sensor_daily_stats`) that the reports use.
+A day counts as *Warning* / *Danger* when a sensor's peak reaches its `warn_level` / `danger_level` (defaults
+30 / 60 cm). Reports only cover time since sensors started reporting. Admins can clear test data with
+`delete from public.sensor_daily_stats;`.
+
+Set `SIMULATE_READINGS` to `1` to send fake readings and test the website with no sensor attached.
 
 ## Roles
 

@@ -4,8 +4,8 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   LayoutDashboard,
   Activity,
+  BarChart3,
   LogOut,
-  Waves,
   Users,
   MessageSquare,
   Contact,
@@ -16,6 +16,7 @@ import {
 import { useNavigate, useLocation } from "react-router";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
+import { BrandMark } from "./BrandMark";
 import { useEscape } from "@/app/hooks/useEscape";
 
 export function GlassmorphicSidebar() {
@@ -30,6 +31,7 @@ export function GlassmorphicSidebar() {
   const allMenuItems = [
     { icon: LayoutDashboard, label: "Dashboard", path: "/", roles: ["admin", "operator", "viewer"] },
     { icon: Activity, label: "Sensor Status", path: "/sensors", roles: ["admin", "operator", "viewer"] },
+    { icon: BarChart3, label: "Analytics", path: "/analytics", roles: ["admin", "operator", "viewer"] },
     { icon: Users, label: "User Management", path: "/users", roles: ["admin"] },
     { icon: MessageSquare, label: "Alert Logs", path: "/sms-logs", roles: ["admin", "operator"] },
     { icon: Contact, label: "Residents", path: "/residents", roles: ["admin", "operator"] },
@@ -192,9 +194,7 @@ export function GlassmorphicSidebar() {
 
         {/* Logo */}
         <div className="relative z-10 flex items-center gap-3 mb-12">
-          <div className="p-3 rounded-2xl" style={{ background: "linear-gradient(135deg, #2EC4B6 0%, #1fa299 100%)", boxShadow: "0 8px 20px rgba(46, 196, 182, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.3)" }}>
-            <Waves className="text-white" size={32} strokeWidth={2.5} />
-          </div>
+          <BrandMark size={56} />
           <div>
             <h1 className="text-white text-xl tracking-tight" style={{ fontWeight: 700 }}>FloodSense</h1>
             <p className="text-[#2EC4B6] text-sm" style={{ fontWeight: 500 }}>Command Center</p>

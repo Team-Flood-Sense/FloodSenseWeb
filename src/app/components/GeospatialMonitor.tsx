@@ -2,6 +2,9 @@ import { useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { MapPin } from 'lucide-react';
 import L from 'leaflet';
+import type { Sensor } from '../hooks/useSensors';
+import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/lib/supabase';
 
 // Leaflet's stylesheet is imported in main.tsx ("leaflet/dist/leaflet.css").
 
@@ -67,6 +70,47 @@ function makeIcon(color: string, glyph: keyof typeof GLYPHS, isSquare = false): 
   });
 }
 
+const SENSOR_COLORS = { online: '#0EA5E9', warning: '#DC2626', offline: '#64748B' } as const;
+const WAVES_GLYPH = 'M2 9c2-2.5 4-2.5 6 0s4 2.5 6 0 4-2.5 8 0v3c-4-2.5-6-2.5-8 0s-4 2.5-6 0-4-2.5-6 0V9zm0 6c2-2.5 4-2.5 6 0s4 2.5 6 0 4-2.5 8 0v3c-4-2.5-6-2.5-8 0s-4 2.5-6 0-4-2.5-6 0v-3z';
+
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** Sensor marker: colour follows its status; the selected one is larger with a ring and a name label. */
+function sensorIcon(s: Sensor, selected: boolean): L.DivIcon {
+  const color = SENSOR_COLORS[s.status];
+  return L.divIcon({
+    className: '',
+    html: `
+      <div style="position:relative;width:50px;height:50px;${selected ? 'transform:scale(1.18);' : ''}">
+        ${s.status !== 'offline' ? `<div style="position:absolute;inset:0;border-radius:50%;background:${color};opacity:0.3;animation:markerPulse 1.8s ease-out infinite;"></div>` : ''}
+        <div style="position:absolute;top:8px;left:8px;width:34px;height:34px;background:${color};border:3px solid white;border-radius:50%;
+          box-shadow:${selected ? `0 0 0 4px ${color}88, ` : ''}0 4px 15px ${color}99;display:flex;align-items:center;justify-content:center;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="${WAVES_GLYPH}"/></svg>
+        </div>
+        <div style="position:absolute;top:48px;left:50%;transform:translateX(-50%);white-space:nowrap;padding:1px 8px;border-radius:99px;
+          background:rgba(11,60,93,0.92);color:white;font:600 11px 'Plus Jakarta Sans','Segoe UI',sans-serif;border:1px solid ${selected ? color : 'rgba(255,255,255,0.15)'};">
+          ${esc(s.name)}
+        </div>
+      </div>`,
+    iconSize: [50, 50],
+    iconAnchor: [25, 25],
+    popupAnchor: [0, -28],
+  });
+}
+
+function sensorPopup(s: Sensor, placed: boolean, canPlace: boolean) {
+  const color = SENSOR_COLORS[s.status];
+  const label = { online: 'Online', warning: 'Warning', offline: 'Offline' }[s.status];
+  return `
+    <div style="font-family:'Plus Jakarta Sans','Segoe UI',sans-serif;min-width:170px;">
+      <strong style="font-size:14px;color:#0f172a;">${esc(s.name)}</strong><br/>
+      <span style="font-size:12px;color:${color};font-weight:600;">${label}</span>
+      <span style="font-size:12px;color:#475569;"> · ${s.status === 'offline' ? 'no recent reading' : esc(s.reading)}</span><br/>
+      <span style="font-size:11px;color:#94a3b8;">${esc(s.location)} · ${esc(s.lastSync)}</span>
+      ${placed ? '' : `<br/><span style="font-size:11px;color:#b45309;">Location not set${canPlace ? ': drag this marker to place it' : ''}</span>`}
+    </div>`;
+}
+
 function popup(title: string, kind: string, kindColor: string, place: Place) {
   return `
     <div style="font-family:'Plus Jakarta Sans','Segoe UI',sans-serif;min-width:170px;">
@@ -76,9 +120,21 @@ function popup(title: string, kind: string, kindColor: string, place: Place) {
     </div>`;
 }
 
-export function GeospatialMonitor() {
+interface GeospatialMonitorProps {
+  sensors: Sensor[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}
+
+export function GeospatialMonitor({ sensors, selectedId, onSelect }: GeospatialMonitorProps) {
   const mapDivRef = useRef<HTMLDivElement>(null);
   const mapRef    = useRef<L.Map | null>(null);
+  const markersRef = useRef(new Map<string, { marker: L.Marker; key: string }>());
+  const draggingRef = useRef(new Set<string>());
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const { role } = useAuth();
+  const canPlace = role === 'admin' || role === 'operator';
 
   useEffect(() => {
     if (mapRef.current || !mapDivRef.current) return;
@@ -118,8 +174,59 @@ export function GeospatialMonitor() {
     return () => {
       mapRef.current?.remove();
       mapRef.current = null;
+      markersRef.current.clear();
     };
   }, []);
+
+  // Sensor markers: add / refresh / remove as the sensor list or the selection changes
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const seen = new Set<string>();
+
+    sensors.forEach((s, i) => {
+      seen.add(s.id);
+      const placed = s.lat !== null && s.lng !== null;
+      // Sensors without a saved position wait next to the DRRM office until someone drags them into place
+      const pos: [number, number] = placed
+        ? [s.lat as number, s.lng as number]
+        : [DRRM_OFFICE.lat + 0.00035 * (i + 1), DRRM_OFFICE.lng - 0.0003];
+      const selected = s.id === selectedId;
+      const key = `${s.status}|${selected}|${s.name}`;
+
+      let entry = markersRef.current.get(s.id);
+      if (!entry) {
+        const marker = L.marker(pos, { icon: sensorIcon(s, selected), draggable: canPlace, zIndexOffset: 1000, title: s.name }).addTo(map);
+        marker.bindPopup('');
+        marker.on('click', () => onSelectRef.current(s.id));
+        marker.on('dragstart', () => draggingRef.current.add(s.id));
+        marker.on('dragend', async () => {
+          const { lat, lng } = marker.getLatLng();
+          await supabase.from('sensors').update({ lat, lng }).eq('id', s.id);
+          draggingRef.current.delete(s.id);
+        });
+        entry = { marker, key };
+        markersRef.current.set(s.id, entry);
+      } else {
+        if (entry.key !== key) {
+          entry.marker.setIcon(sensorIcon(s, selected));
+          entry.key = key;
+        }
+        if (!draggingRef.current.has(s.id)) entry.marker.setLatLng(pos);
+        if (canPlace) entry.marker.dragging?.enable();
+        else entry.marker.dragging?.disable();
+      }
+      entry.marker.setPopupContent(sensorPopup(s, placed, canPlace));
+      entry.marker.setZIndexOffset(selected ? 2000 : 1000);
+    });
+
+    markersRef.current.forEach((entry, id) => {
+      if (!seen.has(id)) {
+        entry.marker.remove();
+        markersRef.current.delete(id);
+      }
+    });
+  }, [sensors, selectedId, canPlace]);
 
   return (
     <motion.div
@@ -165,6 +272,10 @@ export function GeospatialMonitor() {
         <div className="absolute bottom-6 right-6 p-4 rounded-2xl bg-[#0B3C5D]/90 backdrop-blur-xl border border-white/10 pointer-events-none" style={{ zIndex: 1000 }}>
           <h4 className="text-white text-sm mb-3" style={{ fontWeight: 600 }}>Legend</h4>
           <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full" style={{ background: SENSOR_COLORS.online, boxShadow: '0 0 8px rgba(14, 165, 233, 0.5)' }} />
+              <span className="text-white/80 text-xs">Water Sensor</span>
+            </div>
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded-full" style={{ background: '#FF6B35', boxShadow: '0 0 8px rgba(255, 107, 53, 0.5)' }} />
               <span className="text-white/80 text-xs">Flood Area</span>

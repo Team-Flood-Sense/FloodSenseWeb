@@ -7,7 +7,7 @@ import { Unauthorized } from './pages/Unauthorized';
 import { TwoFactorAuth } from './pages/TwoFactorAuth';
 import { SetupAdmin } from './pages/SetupAdmin';
 import { ProtectedRoute } from './components/ProtectedRoute';
-import { loadDashboard, loadSensorStatus, loadUserManagement, loadSMSBlastLogs, loadResidents } from './pages/loaders';
+import { loadDashboard, loadSensorStatus, loadAnalytics, loadUserManagement, loadSMSBlastLogs, loadResidents } from './pages/loaders';
 
 export const router = createBrowserRouter([
   // Public & Auth routes
@@ -52,6 +52,10 @@ export const router = createBrowserRouter([
       {
         path: 'sensors',
         lazy: loadSensorStatus,
+      },
+      {
+        path: 'analytics',
+        lazy: loadAnalytics,
       },
       {
         element: <ProtectedRoute allowedRoles={['admin']} />,
