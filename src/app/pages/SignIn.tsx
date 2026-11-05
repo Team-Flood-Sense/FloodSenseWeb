@@ -74,7 +74,7 @@ export function SignIn() {
       <div className="relative w-full max-w-md mx-4">
 
         {/* Card */}
-        <div className="bg-[#1a2a3a] border border-[#2a3f55] rounded-2xl p-8 shadow-2xl">
+        <div className="bg-[#1a2a3a] border border-[#2a3f55] rounded-2xl p-5 sm:p-8 shadow-2xl">
 
           {/* Logo + Title */}
           <div className="flex flex-col items-center mb-8">

@@ -9,7 +9,7 @@ export function SensorStatus() {
   return (
     <div className="flex-1 space-y-6">
       {/* Top Stats Row */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
         <StatCard
           icon={Radio}
           label="Total Sensors"

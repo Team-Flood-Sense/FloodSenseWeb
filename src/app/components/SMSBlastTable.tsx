@@ -419,8 +419,8 @@ export function SMSBlastTable() {
 
         <div className="relative z-10">
           {/* Header */}
-          <div className="p-8 border-b border-ink/10">
-            <div className="flex items-center justify-between mb-6">
+          <div className="p-5 sm:p-8 border-b border-ink/10">
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
               <div>
                 <h3 className="text-ink text-2xl mb-1" style={{ fontWeight: 700 }}>Alert Logs</h3>
                 <p className="text-ink/60 text-sm">Audit trail of every SMS, email and app alert</p>
@@ -741,7 +741,7 @@ export function SMSBlastTable() {
               style={{ pointerEvents: 'none' }}
             >
               <div
-                className="w-full max-w-sm p-8 relative"
+                className="w-full max-w-sm p-5 sm:p-8 relative"
                 style={{
                   background: 'rgba(var(--surface-rgb), 0.97)',
                   borderRadius: '28px',
@@ -822,7 +822,7 @@ export function SMSBlastTable() {
                 style={{ pointerEvents: 'none' }}
               >
                 <div
-                  className="w-full max-w-lg p-8 relative"
+                  className="w-full max-w-lg p-5 sm:p-8 relative"
                   style={{
                     background: 'rgba(var(--surface-rgb), 0.95)',
                     borderRadius: '28px',
@@ -832,7 +832,7 @@ export function SMSBlastTable() {
                   }}
                 >
                   {/* Header */}
-                  <div className="flex items-center justify-between mb-6">
+                  <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
                     <div className="flex items-center gap-3">
                       <div className="p-2.5 rounded-xl" style={{ background: levelStyle.background, border: levelStyle.border }}>
                         <LevelIcon style={{ color: levelStyle.color }} size={20} strokeWidth={2.5} />
@@ -992,7 +992,7 @@ export function SMSBlastTable() {
               style={{ pointerEvents: 'none' }}
             >
               <div
-                className="w-full max-w-lg p-8 relative"
+                className="w-full max-w-lg p-5 sm:p-8 relative"
                 style={{
                   background: 'rgba(var(--surface-rgb), 0.95)',
                   borderRadius: '28px',
@@ -1001,7 +1001,7 @@ export function SMSBlastTable() {
                   pointerEvents: 'all',
                 }}
               >
-                <div className="flex items-center justify-between mb-6">
+                <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
                   <div>
                     <h3 className="text-ink text-xl" style={{ fontWeight: 700 }}>Compose Alert</h3>
                     <p className="text-ink/50 text-sm mt-0.5">Send a manual alert by SMS, email, app notification, or any mix</p>

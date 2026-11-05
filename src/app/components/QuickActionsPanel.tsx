@@ -224,7 +224,7 @@ export function QuickActionsPanel() {
               style={{ pointerEvents: 'none' }}
             >
               <div
-                className="w-full max-w-sm p-8 relative"
+                className="w-full max-w-sm p-5 sm:p-8 relative"
                 style={{
                   background: 'rgba(var(--surface-rgb), 0.95)',
                   borderRadius: '28px',
@@ -337,7 +337,7 @@ export function QuickActionsPanel() {
               style={{ pointerEvents: 'none' }}
             >
               <div
-                className="w-full max-w-sm p-8 relative text-center"
+                className="w-full max-w-sm p-5 sm:p-8 relative text-center"
                 style={{
                   background: 'rgba(var(--surface-rgb), 0.95)',
                   borderRadius: '28px',

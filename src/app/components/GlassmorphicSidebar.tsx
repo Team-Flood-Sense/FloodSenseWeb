@@ -18,7 +18,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { useEscape } from "@/app/hooks/useEscape";
 
-export function GlassmorphicSidebar() {
+export function GlassmorphicSidebar({ open = false, onClose }: { open?: boolean; onClose?: () => void }) {
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -175,11 +175,14 @@ export function GlassmorphicSidebar() {
 
   return (
     <>
+      <aside
+        className={`fixed inset-y-3 left-3 z-50 w-72 max-w-[85vw] transition-transform duration-300 lg:static lg:inset-auto lg:z-auto lg:translate-x-0 lg:max-w-none lg:h-auto shrink-0 ${open ? "translate-x-0" : "-translate-x-[110%]"}`}
+      >
       <motion.div
         initial={{ x: -20, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         transition={{ duration: 0.25 }}
-        className="w-72 h-full shrink-0 p-6 relative flex flex-col overflow-y-auto"
+        className="w-full h-full p-6 relative flex flex-col overflow-y-auto"
         style={{
           background: "var(--sidebar-bg)",
           borderRadius: "28px",
@@ -212,7 +215,7 @@ export function GlassmorphicSidebar() {
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.04 }}
-                onClick={() => navigate(item.path)}
+                onClick={() => { navigate(item.path); onClose?.(); }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 group ${isActive ? "active-menu-item" : "hover:bg-white/5"}`}
                 style={isActive ? {
                   background: "linear-gradient(135deg, rgba(46, 196, 182, 0.2) 0%, rgba(46, 196, 182, 0.1) 100%)",
@@ -278,6 +281,7 @@ export function GlassmorphicSidebar() {
           </button>
         </div>
       </motion.div>
+      </aside>
 
       {/* Profile Modal */}
       {createPortal(
@@ -315,7 +319,7 @@ export function GlassmorphicSidebar() {
                     maxHeight: "90vh", overflowY: "auto",
                     background: "white",
                     borderRadius: "24px",
-                    padding: "32px",
+                    padding: "clamp(20px, 5vw, 32px)",
                     boxShadow: "0 24px 60px rgba(0,0,0,0.3)",
                   }}
                 >

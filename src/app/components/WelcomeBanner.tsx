@@ -19,7 +19,7 @@ export function WelcomeBanner() {
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className="relative overflow-hidden p-8"
+      className="relative overflow-hidden p-5 sm:p-8"
       style={{
         borderRadius: '28px',
         background: '#1E6FA8',
@@ -36,7 +36,7 @@ export function WelcomeBanner() {
       <div className="relative z-10 flex flex-wrap items-center justify-between gap-6">
         <div className="min-w-0">
           <p className="text-white/70 text-sm" style={{ fontWeight: 600 }}>{greeting()},</p>
-          <h1 className="text-white text-3xl mt-0.5 truncate" style={{ fontWeight: 800, letterSpacing: '-0.015em' }}>
+          <h1 className="text-white text-2xl sm:text-3xl mt-0.5 truncate" style={{ fontWeight: 800, letterSpacing: '-0.015em' }}>
             {firstName}
           </h1>
           <p className="text-white/75 text-sm mt-2 max-w-xl">

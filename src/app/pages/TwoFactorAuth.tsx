@@ -167,7 +167,7 @@ export function TwoFactorAuth() {
     >
       {/* Background ambient glow */}
       <div
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full pointer-events-none"
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] max-w-full rounded-full pointer-events-none"
         style={{
           background: 'radial-gradient(circle, rgba(46,196,182,0.05) 0%, rgba(0,0,0,0) 70%)',
         }}
@@ -177,7 +177,7 @@ export function TwoFactorAuth() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, ease: "easeOut" }}
-        className="w-full max-w-md p-8 relative z-10"
+        className="w-full max-w-md p-5 sm:p-8 relative z-10"
         style={{
           background: "rgba(11, 60, 93, 0.4)",
           backdropFilter: "blur(20px)",

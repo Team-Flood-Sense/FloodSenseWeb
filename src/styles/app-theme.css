@@ -87,3 +87,24 @@ html.dark select option {
   scrollbar-width: thin;
   scrollbar-color: var(--scroll-thumb) transparent;
 }
+
+/* Semi-transparent map attribution so it doesn't block the map */
+.leaflet-container .leaflet-control-attribution {
+  background: rgba(255, 255, 255, 0.35) !important;
+  backdrop-filter: blur(2px);
+}
+html.dark .leaflet-container .leaflet-control-attribution {
+  background: rgba(15, 23, 42, 0.55) !important;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Attribution links look like the plain "Leaflet" text (both themes) */
+.leaflet-container .leaflet-control-attribution a,
+html.dark .leaflet-container .leaflet-control-attribution a {
+  color: inherit;
+  font-weight: inherit;
+  text-decoration: none;
+}
+.leaflet-container .leaflet-control-attribution a:hover {
+  text-decoration: underline;
+}

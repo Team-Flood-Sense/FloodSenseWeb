@@ -287,8 +287,8 @@ export function UserTable() {
 
         <div className="relative z-10">
           {/* Header */}
-          <div className="p-8 border-b border-ink/10">
-            <div className="flex items-center justify-between mb-6">
+          <div className="p-5 sm:p-8 border-b border-ink/10">
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
               <div>
                 <h3 className="text-ink text-2xl mb-1" style={{ fontWeight: 700 }}>
                   User Management
@@ -548,7 +548,7 @@ export function UserTable() {
               style={{ pointerEvents: 'none' }}
             >
               <div
-                className="w-full max-w-md p-8 relative"
+                className="w-full max-w-md p-5 sm:p-8 relative"
                 style={{
                   background: 'rgba(var(--surface-rgb), 0.95)',
                   borderRadius: '28px',
@@ -557,7 +557,7 @@ export function UserTable() {
                   pointerEvents: 'all',
                 }}
               >
-                <div className="flex items-center justify-between mb-6">
+                <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
                   <div>
                     <h3 className="text-ink text-xl" style={{ fontWeight: 700 }}>Add New User</h3>
                     <p className="text-ink/50 text-sm mt-0.5">Fill in the details to register a new team member</p>
@@ -643,7 +643,7 @@ export function UserTable() {
               style={{ pointerEvents: 'none' }}
             >
               <div
-                className="w-full max-w-md p-8 relative"
+                className="w-full max-w-md p-5 sm:p-8 relative"
                 style={{
                   background: 'rgba(var(--surface-rgb), 0.95)',
                   borderRadius: '28px',
@@ -652,7 +652,7 @@ export function UserTable() {
                   pointerEvents: 'all',
                 }}
               >
-                <div className="flex items-center justify-between mb-6">
+                <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
                   <div>
                     <h3 className="text-ink text-xl" style={{ fontWeight: 700 }}>Edit User</h3>
                     <p className="text-ink/50 text-sm mt-0.5">Update the details for {editingUser.name}</p>
@@ -742,7 +742,7 @@ export function UserTable() {
               style={{ pointerEvents: 'none' }}
             >
               <div
-                className="w-full max-w-sm p-8 relative"
+                className="w-full max-w-sm p-5 sm:p-8 relative"
                 style={{
                   background: 'rgba(var(--surface-rgb), 0.95)',
                   borderRadius: '28px',

@@ -40,9 +40,9 @@ export function TopBar() {
           <span className="w-1.5 h-1.5 rounded-full bg-[#2EC4B6]" />
           FLOODSENSE <span className="text-ink/30">/</span> {page.title.toUpperCase()}
         </p>
-        <h2 className="text-ink text-2xl truncate" style={{ fontWeight: 800, letterSpacing: '-0.01em' }}>
+        <h2 className="text-ink text-xl sm:text-2xl truncate" style={{ fontWeight: 800, letterSpacing: '-0.01em' }}>
           {page.title}
-          <span className="text-ink/45 text-sm ml-3" style={{ fontWeight: 500, letterSpacing: 0 }}>{page.subtitle}</span>
+          <span className="hidden sm:inline text-ink/45 text-sm ml-3" style={{ fontWeight: 500, letterSpacing: 0 }}>{page.subtitle}</span>
         </h2>
       </div>
 

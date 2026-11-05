@@ -83,7 +83,8 @@ export function GeospatialMonitor() {
   useEffect(() => {
     if (mapRef.current || !mapDivRef.current) return;
 
-    const map = L.map(mapDivRef.current, { zoomControl: true });
+    const map = L.map(mapDivRef.current, { zoomControl: true, attributionControl: false });
+    L.control.attribution({ prefix: 'Leaflet' }).addTo(map); // plain text, no flag
     mapRef.current = map;
 
     // OpenStreetMap tiles (free, no API key)
