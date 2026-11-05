@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
+import { BrandMark } from '@/app/components/BrandMark';
 
 export function SignIn() {
   const navigate = useNavigate();
@@ -78,22 +79,7 @@ export function SignIn() {
 
           {/* Logo + Title */}
           <div className="flex flex-col items-center mb-8">
-            <div className="w-14 h-14 rounded-xl bg-[#0ea5e9] flex items-center justify-center mb-4 shadow-lg shadow-sky-500/30">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="w-8 h-8 text-white"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M3 15s1.5-2 3-2 3 2 3 2 1.5-2 3-2 3 2 3 2 1.5-2 3-2 3 2 3 2M3 19s1.5-2 3-2 3 2 3 2 1.5-2 3-2 3 2 3 2 1.5-2 3-2 3 2 3 2M12 3v8"
-                />
-              </svg>
-            </div>
+            <BrandMark size={72} className="mb-4" />
             <h1 className="text-2xl font-bold text-white tracking-wide">FloodSense</h1>
             <p className="text-sm text-slate-400 mt-1">Command Center</p>
           </div>

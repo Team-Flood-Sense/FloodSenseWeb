@@ -10,7 +10,7 @@
 //       BREVO_API_KEY        Brevo > SMTP & API > API Keys
 //       EMAIL_SENDER_EMAIL   a sender address verified in Brevo
 //
-//  Optional for both: EMAIL_SENDER_NAME (defaults to "FloodSense").
+//  Optional for both: EMAIL_SENDER_NAME (defaults to "BDRRMO Pamplona Tres").
 //
 // Deploy with "Verify JWT" OFF: the function checks the caller itself (admin/operator + 2FA).
 
@@ -67,7 +67,7 @@ const escapeHtml = (s: string) =>
 
 function buildEmail(blast: { message: string; level: string; location: string; email_subject: string | null; created_at: string }) {
   const level = LEVELS[blast.level] ?? LEVELS.INFO;
-  const subject = (blast.email_subject || `[FloodSense] ${level.label}: ${blast.location}`).replace(/[\r\n]+/g, " ");
+  const subject = (blast.email_subject || `[BDRRMO Pamplona Tres] ${level.label}: ${blast.location}`).replace(/[\r\n]+/g, " ");
   const when = new Date(blast.created_at).toLocaleString("en-PH", { timeZone: "Asia/Manila", dateStyle: "long", timeStyle: "short" });
   const message = escapeHtml(blast.message).replace(/\n/g, "<br/>");
 
@@ -77,7 +77,7 @@ function buildEmail(blast: { message: string; level: string; location: string; e
     <tr><td align="center">
       <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="max-width:560px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;">
         <tr><td style="background:${level.color};padding:20px 28px;color:#ffffff;">
-          <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.9;">FloodSense Command Center</div>
+          <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.9;">BDRRMO Pamplona Tres</div>
           <div style="font-size:22px;font-weight:700;margin-top:4px;">${escapeHtml(level.label)}</div>
         </td></tr>
         <tr><td style="padding:28px;color:#0b3c5d;">
@@ -96,7 +96,7 @@ function buildEmail(blast: { message: string; level: string; location: string; e
   </table>
 </body></html>`;
 
-  const text = `[FloodSense] ${level.label.toUpperCase()}\n\n${blast.message}\n\nArea: ${blast.location}\nSent: ${when}\n\n` +
+  const text = `[BDRRMO Pamplona Tres] ${level.label.toUpperCase()}\n\n${blast.message}\n\nArea: ${blast.location}\nSent: ${when}\n\n` +
     "You are receiving this because you registered for flood alerts from Barangay Pamplona 3.";
 
   return { subject, html, text };
@@ -142,7 +142,7 @@ Deno.serve(async (req) => {
 
   const apiKey = Deno.env.get("BREVO_API_KEY");
   const senderEmail = Deno.env.get("EMAIL_SENDER_EMAIL");
-  const senderName = Deno.env.get("EMAIL_SENDER_NAME") || "FloodSense";
+  const senderName = Deno.env.get("EMAIL_SENDER_NAME") || "BDRRMO Pamplona Tres";
   const gmailUser = Deno.env.get("GMAIL_USER")?.trim();
   // Google shows app passwords in groups ("abcd efgh ijkl mnop"); spaces are not part of it
   const gmailPass = Deno.env.get("GMAIL_APP_PASSWORD")?.replace(/\s+/g, "");

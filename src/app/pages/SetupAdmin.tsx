@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
+import { BrandMark } from '@/app/components/BrandMark';
 
 // First-run setup: creates the first admin account when none exists yet.
 // The bootstrap-admin Edge Function enforces this server-side.
@@ -91,6 +92,7 @@ export function SetupAdmin() {
       <div className="relative w-full max-w-md mx-4">
         <div className="bg-[#1a2a3a] border border-[#2a3f55] rounded-2xl p-5 sm:p-8 shadow-2xl">
           <div className="flex flex-col items-center mb-6">
+            <BrandMark size={64} className="mb-4" />
             <h1 className="text-2xl font-bold text-white tracking-wide">FloodSense Setup</h1>
             <p className="text-sm text-slate-400 mt-1 text-center">Create the first administrator account</p>
           </div>
