@@ -4,17 +4,20 @@ import { MetricCard } from '../components/MetricCard';
 import { GeospatialMonitor } from '../components/GeospatialMonitor';
 import { QuickActionsPanel } from '../components/QuickActionsPanel';
 import { WelcomeBanner } from '../components/WelcomeBanner';
+import { LevelRanges } from '../components/LevelRanges';
 import { useSensors } from '../hooks/useSensors';
 import { useFloodForecast } from '../hooks/useFloodForecast';
 
 export function Dashboard() {
   const { sensors, loading } = useSensors();
 
-  // Overall status from the sensors: any warning wins, then all-offline, otherwise optimal
+  // Overall status from the sensors: the worst level wins, then all-offline, otherwise optimal
   const system =
     loading || sensors.length === 0
       ? { label: 'No sensors', accent: '#94A3B8' }
-      : sensors.some((s) => s.status === 'warning')
+      : sensors.some((s) => s.status === 'critical')
+        ? { label: 'Critical', accent: '#DC2626' }
+        : sensors.some((s) => s.status === 'warning')
         ? { label: 'Warning', accent: '#FF6B35' }
         : sensors.every((s) => s.status === 'offline')
           ? { label: 'Offline', accent: '#DC2626' }
@@ -42,8 +45,7 @@ export function Dashboard() {
         <MetricCard
           icon={Droplets}
           title={selected ? `Water Level · ${selected.name}` : 'Water Level'}
-          value={water ? String(water.value) : '—'}
-          unit={water ? water.unit : undefined}
+          value={water ? water.reading : '—'}
           showWaveAnimation={true}
           accent="#0EA5E9"
         />
@@ -55,6 +57,8 @@ export function Dashboard() {
           accent={system.accent}
         />
       </div>
+
+      <LevelRanges sensors={sensors} />
 
       {/* Main Monitor and Actions */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">

@@ -9,12 +9,14 @@ import {
   Users,
   MessageSquare,
   Contact,
+  History,
   X,
   Eye,
   EyeOff,
 } from "lucide-react";
 import { useNavigate, useLocation } from "react-router";
 import { supabase } from "@/lib/supabase";
+import { signOut } from "@/lib/session";
 import { useAuth } from "@/context/AuthContext";
 import { BrandMark } from "./BrandMark";
 import { useEscape } from "@/app/hooks/useEscape";
@@ -35,6 +37,7 @@ export function GlassmorphicSidebar({ open = false, onClose }: { open?: boolean;
     { icon: Users, label: "User Management", path: "/users", roles: ["admin"] },
     { icon: MessageSquare, label: "Alert Logs", path: "/sms-logs", roles: ["admin", "operator"] },
     { icon: Contact, label: "Residents", path: "/residents", roles: ["admin", "operator"] },
+    { icon: History, label: "Activity Logs", path: "/activity", roles: ["admin"] },
   ];
 
   const menuItems = allMenuItems.filter(item => role && item.roles.includes(role));
@@ -171,7 +174,7 @@ export function GlassmorphicSidebar({ open = false, onClose }: { open?: boolean;
   }
 
   async function handleSignOut() {
-    await supabase.auth.signOut();
+    await signOut();
     navigate("/signin");
   }
 

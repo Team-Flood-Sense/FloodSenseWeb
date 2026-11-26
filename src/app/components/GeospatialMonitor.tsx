@@ -70,14 +70,14 @@ function makeIcon(color: string, glyph: keyof typeof GLYPHS, isSquare = false): 
   });
 }
 
-const SENSOR_COLORS = { online: '#0EA5E9', warning: '#DC2626', offline: '#64748B' } as const;
+const SENSOR_COLORS = { online: '#0EA5E9', warning: '#F59E0B', critical: '#DC2626', offline: '#64748B' } as const;
 const WAVES_GLYPH = 'M2 9c2-2.5 4-2.5 6 0s4 2.5 6 0 4-2.5 8 0v3c-4-2.5-6-2.5-8 0s-4 2.5-6 0-4-2.5-6 0V9zm0 6c2-2.5 4-2.5 6 0s4 2.5 6 0 4-2.5 8 0v3c-4-2.5-6-2.5-8 0s-4 2.5-6 0-4-2.5-6 0v-3z';
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-/** Sensor marker: legend blue (red only for a warning, faded when offline); the selected one is larger with a ring and a name label. */
+/** Sensor marker: legend blue (amber for a warning, red when critical, faded when offline); the selected one is larger with a ring and a name label. */
 function sensorIcon(s: Sensor, selected: boolean): L.DivIcon {
-  const color = s.status === 'warning' ? SENSOR_COLORS.warning : SENSOR_COLORS.online;
+  const color = s.status === 'offline' ? SENSOR_COLORS.online : SENSOR_COLORS[s.status];
   return L.divIcon({
     className: '',
     html: `
@@ -100,7 +100,7 @@ function sensorIcon(s: Sensor, selected: boolean): L.DivIcon {
 
 function sensorPopup(s: Sensor, placed: boolean, canPlace: boolean) {
   const color = SENSOR_COLORS[s.status];
-  const label = { online: 'Online', warning: 'Warning', offline: 'Offline' }[s.status];
+  const label = { online: 'Online', warning: 'Warning', critical: 'Critical', offline: 'Offline' }[s.status];
   return `
     <div style="font-family:'Plus Jakarta Sans','Segoe UI',sans-serif;min-width:170px;">
       <strong style="font-size:14px;color:#0f172a;">${esc(s.name)}</strong><br/>

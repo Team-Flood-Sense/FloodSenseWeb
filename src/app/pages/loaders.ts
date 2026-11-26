@@ -4,6 +4,7 @@ export const loadDashboard = () => import('./Dashboard').then((m) => ({ Componen
 export const loadSensorStatus = () => import('./SensorStatus').then((m) => ({ Component: m.SensorStatus }));
 export const loadAnalytics = () => import('./Analytics').then((m) => ({ Component: m.Analytics }));
 export const loadUserManagement = () => import('./UserManagement').then((m) => ({ Component: m.UserManagement }));
+export const loadActivityLogs = () => import('./ActivityLogs').then((m) => ({ Component: m.ActivityLogs }));
 export const loadResidents = () => import('./Residents').then((m) => ({ Component: m.Residents }));
 export const loadSMSBlastLogs = () => import('./SMSBlastLogs').then((m) => ({ Component: m.SMSBlastLogs }));
 
@@ -16,6 +17,7 @@ export function preloadPages() {
     loadUserManagement();
     loadSMSBlastLogs();
     loadResidents();
+    loadActivityLogs();
   };
   if ('requestIdleCallback' in window) {
     (window as Window & { requestIdleCallback: (cb: () => void) => void }).requestIdleCallback(run);

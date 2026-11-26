@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import { ShieldCheck, ArrowRight, ArrowLeft } from "lucide-react";
 import { Navigate, useNavigate, useSearchParams } from "react-router";
 import { supabase } from "@/lib/supabase";
+import { logSession } from "@/lib/session";
 import { useAuth } from "@/context/AuthContext";
 
 // Real 2FA using Supabase MFA (TOTP authenticator apps such as Google
@@ -151,6 +152,7 @@ export function TwoFactorAuth() {
 
     // ✅ Sign-in fully completed: record it as the user's last activity
     await supabase.from("profiles").update({ last_active: new Date().toISOString() }).eq("id", user.id);
+    await logSession("login");
     navigate(next, { replace: true });
   };
 

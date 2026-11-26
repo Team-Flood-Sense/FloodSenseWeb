@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'motion/react';
-import { Edit2, Trash2, Search, UserPlus, X, AlertTriangle } from 'lucide-react';
+import { Edit2, Archive, ArchiveRestore, Search, UserPlus, X } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
@@ -12,7 +12,7 @@ interface User {
   email: string;
   phone: string;
   role: 'Admin' | 'Operator' | 'Viewer';
-  status: 'Active' | 'Inactive';
+  status: 'Active' | 'Inactive' | 'Archived';
   avatar: string;
   lastActive: string;
   location: string;
@@ -63,18 +63,18 @@ export function UserTable() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [editLoading, setEditLoading] = useState(false);
 
-  // Delete modal
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [deletingUser, setDeletingUser] = useState<User | null>(null);
-  const [deleteLoading, setDeleteLoading] = useState(false);
+  // Archive / restore modal
+  const [showArchived, setShowArchived] = useState(false);
+  const [archivingUser, setArchivingUser] = useState<User | null>(null);
+  const [archiveLoading, setArchiveLoading] = useState(false);
 
   // Escape closes whichever modal is open
   const closeModals = useCallback(() => {
     setShowAddModal(false);
     setShowEditModal(false);
-    setShowDeleteModal(false);
+    setArchivingUser(null);
   }, []);
-  useEscape(showAddModal || showEditModal || showDeleteModal, closeModals);
+  useEscape(showAddModal || showEditModal || archivingUser !== null, closeModals);
 
   // ✅ Fetch users from the profiles table
   const fetchUsers = useCallback(async () => {
@@ -213,25 +213,35 @@ export function UserTable() {
     }
   }
 
-  // ✅ Delete User — removes the Auth account (profile row cascades)
-  async function handleDeleteUser() {
-    if (!deletingUser) return;
+  // ✅ Archive / restore — the account is kept, only its access changes
+  async function handleArchive() {
+    if (!archivingUser) return;
     setActionError('');
-    setDeleteLoading(true);
+    setArchiveLoading(true);
 
     try {
-      await invokeAdminUsers({ action: 'delete', id: deletingUser.id });
-      setShowDeleteModal(false);
-      setDeletingUser(null);
+      await invokeAdminUsers({
+        action: 'set-status',
+        id: archivingUser.id,
+        status: archivingUser.status === 'Archived' ? 'Active' : 'Archived',
+      });
+      setArchivingUser(null);
       fetchUsers();
     } catch (err: any) {
-      setActionError(err.message || 'Failed to delete user. Please try again.');
+      setActionError(
+        err.message?.includes('last active admin')
+          ? 'There must always be at least one active admin.'
+          : err.message || 'Failed to update user. Please try again.',
+      );
     } finally {
-      setDeleteLoading(false);
+      setArchiveLoading(false);
     }
   }
 
-  const filteredUsers = users.filter(user =>
+  const archivedCount = users.filter((u) => u.status === 'Archived').length;
+  const listed = users.filter((u) => (u.status === 'Archived') === showArchived);
+
+  const filteredUsers = listed.filter(user =>
     user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     user.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
     user.location.toLowerCase().includes(searchQuery.toLowerCase())
@@ -294,7 +304,7 @@ export function UserTable() {
                   User Management
                 </h3>
                 <p className="text-ink/60 text-sm">
-                  Staff accounts only (admins, operators, viewers). Residents are managed on the Residents page.
+                  Staff accounts only (admins, operators, viewers). Accounts are archived instead of deleted. Residents are managed on the Residents page.
                 </p>
               </div>
               <motion.button
@@ -332,6 +342,20 @@ export function UserTable() {
                 className="w-full pl-12 pr-4 py-3 bg-transparent text-ink placeholder:text-ink/40 text-sm outline-none"
                 style={{ fontWeight: 500 }}
               />
+            </div>
+
+            <div className="flex w-fit rounded-xl bg-ink/5 p-1 mt-4">
+              {[false, true].map((archived) => (
+                <button
+                  key={String(archived)}
+                  type="button"
+                  onClick={() => setShowArchived(archived)}
+                  className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${showArchived === archived ? 'bg-ink text-surface' : 'text-ink/70 hover:text-ink'}`}
+                  style={{ fontWeight: 600 }}
+                >
+                  {archived ? `Archived (${archivedCount})` : `Current (${users.length - archivedCount})`}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -458,6 +482,17 @@ export function UserTable() {
                           {/* Actions */}
                           <td className="px-8 py-5">
                             <div className="flex items-center justify-center gap-2">
+                              {user.status === 'Archived' ? (
+                                <button
+                                  type="button"
+                                  onClick={() => { setArchivingUser(user); setActionError(''); }}
+                                  className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-link"
+                                  style={{ background: 'rgba(29, 112, 162, 0.1)', fontWeight: 600 }}
+                                >
+                                  <ArchiveRestore size={16} strokeWidth={2.5} /> Restore
+                                </button>
+                              ) : (
+                              <>
                               <motion.button
                                 aria-label={`Edit ${user.name}`}
                                 whileHover={{ scale: 1.1, y: -2 }}
@@ -474,18 +509,21 @@ export function UserTable() {
 
                               {user.id !== currentUser?.id && (
                               <motion.button
-                                aria-label={`Delete ${user.name}`}
+                                aria-label={`Archive ${user.name}`}
+                                title="Archive"
                                 whileHover={{ scale: 1.1, y: -2 }}
                                 whileTap={{ scale: 0.95 }}
-                                onClick={() => { setDeletingUser(user); setShowDeleteModal(true); setActionError(''); }}
+                                onClick={() => { setArchivingUser(user); setActionError(''); }}
                                 className="p-2 rounded-xl"
                                 style={{
                                   background: 'linear-gradient(135deg, rgba(255, 107, 53, 0.08) 0%, rgba(255, 107, 53, 0.04) 100%)',
                                   boxShadow: '0 2px 8px rgba(255, 107, 53, 0.1)',
                                 }}
                               >
-                                <Trash2 className="text-[#FF6B35]" size={16} strokeWidth={2.5} />
+                                <Archive className="text-[#FF6B35]" size={16} strokeWidth={2.5} />
                               </motion.button>
+                              )}
+                              </>
                               )}
                             </div>
                           </td>
@@ -502,7 +540,7 @@ export function UserTable() {
           <div className="px-8 py-5 border-t border-ink/10 bg-surface/40">
             <div className="flex items-center justify-between">
               <span className="text-ink/60 text-sm">
-                Showing {filteredUsers.length} of {users.length} users
+                Showing {filteredUsers.length} of {listed.length} {showArchived ? 'archived ' : ''}users
               </span>
               <div className="flex items-center gap-2">
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#2EC4B6]/10">
@@ -723,13 +761,13 @@ export function UserTable() {
         )}
       </AnimatePresence>
 
-      {/* ===================== DELETE MODAL ===================== */}
+      {/* ===================== ARCHIVE / RESTORE MODAL ===================== */}
       <AnimatePresence>
-        {showDeleteModal && deletingUser && (
+        {archivingUser && (
           <>
             <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={() => setShowDeleteModal(false)}
+              onClick={() => setArchivingUser(null)}
               className="fixed inset-0 z-40"
               style={{ background: 'rgba(var(--ink-rgb), 0.5)', backdropFilter: 'blur(4px)' }}
             />
@@ -753,13 +791,21 @@ export function UserTable() {
               >
                 <div className="flex justify-center mb-4">
                   <div className="p-4 rounded-2xl" style={{ background: 'rgba(255, 107, 53, 0.1)' }}>
-                    <AlertTriangle className="text-[#FF6B35]" size={32} strokeWidth={2} />
+                    {archivingUser.status === 'Archived'
+                      ? <ArchiveRestore className="text-[#FF6B35]" size={32} strokeWidth={2} />
+                      : <Archive className="text-[#FF6B35]" size={32} strokeWidth={2} />}
                   </div>
                 </div>
 
-                <h3 className="text-ink text-xl text-center mb-2" style={{ fontWeight: 700 }}>Delete User</h3>
+                <h3 className="text-ink text-xl text-center mb-2" style={{ fontWeight: 700 }}>
+                  {archivingUser.status === 'Archived' ? 'Restore User' : 'Archive User'}
+                </h3>
                 <p className="text-ink/60 text-sm text-center mb-6">
-                  Are you sure you want to delete <span className="font-semibold text-ink">{deletingUser.name}</span>? This action cannot be undone.
+                  {archivingUser.status === 'Archived' ? 'Restore ' : 'Archive '}
+                  <span className="font-semibold text-ink">{archivingUser.name}</span>?{' '}
+                  {archivingUser.status === 'Archived'
+                    ? 'The account becomes Active and can sign in again.'
+                    : 'They can no longer sign in. The account and its history are kept, and you can restore it later.'}
                 </p>
 
                 {actionError && (
@@ -768,7 +814,7 @@ export function UserTable() {
 
                 <div className="flex gap-3">
                   <button
-                    onClick={() => setShowDeleteModal(false)}
+                    onClick={() => setArchivingUser(null)}
                     className="flex-1 py-3 rounded-2xl text-sm"
                     style={{ background: 'rgba(var(--ink-rgb), 0.05)', color: 'rgb(var(--ink-rgb))', fontWeight: 600, border: '1px solid rgba(var(--ink-rgb), 0.1)' }}
                   >
@@ -776,12 +822,12 @@ export function UserTable() {
                   </button>
                   <motion.button
                     whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-                    onClick={handleDeleteUser}
-                    disabled={deleteLoading}
+                    onClick={handleArchive}
+                    disabled={archiveLoading}
                     className="flex-1 py-3 rounded-2xl text-sm text-white"
-                    style={{ background: 'linear-gradient(135deg, #FF6B35 0%, #FF8C42 100%)', boxShadow: '0 8px 24px rgba(255, 107, 53, 0.4)', fontWeight: 600, opacity: deleteLoading ? 0.7 : 1 }}
+                    style={{ background: 'linear-gradient(135deg, #FF6B35 0%, #FF8C42 100%)', boxShadow: '0 8px 24px rgba(255, 107, 53, 0.4)', fontWeight: 600, opacity: archiveLoading ? 0.7 : 1 }}
                   >
-                    {deleteLoading ? 'Deleting...' : 'Delete'}
+                    {archiveLoading ? 'Saving...' : archivingUser.status === 'Archived' ? 'Restore' : 'Archive'}
                   </motion.button>
                 </div>
               </div>

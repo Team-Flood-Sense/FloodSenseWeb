@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { classify, formatLevel } from '../../lib/water';
 
 export interface Sensor {
   id: string;
   name: string;
   type: 'water' | 'rainfall' | 'wind' | 'temperature';
   location: string;
-  status: 'online' | 'warning' | 'offline';
+  status: 'online' | 'warning' | 'critical' | 'offline';
   reading: string;
   value: number | null;
   unit: string;
@@ -49,15 +50,16 @@ function timeAgo(ms: number): string {
 function toSensor(row: SensorRow, now: number): Sensor {
   const age = row.last_seen ? now - new Date(row.last_seen).getTime() : Infinity;
   const value = row.reading === null ? null : Number(row.reading);
+  const level = value === null ? 'normal' : classify(value, Number(row.warn_level), Number(row.danger_level));
   const status: Sensor['status'] =
-    age > OFFLINE_AFTER_MS ? 'offline' : value !== null && value >= Number(row.warn_level) ? 'warning' : 'online';
+    age > OFFLINE_AFTER_MS ? 'offline' : level === 'danger' ? 'critical' : level === 'warning' ? 'warning' : 'online';
   return {
     id: row.id,
     name: row.name,
     type: row.type,
     location: row.location,
     status,
-    reading: value === null ? '—' : `${value} ${row.unit}`,
+    reading: formatLevel(value, row.unit),
     value,
     unit: row.unit,
     warnLevel: Number(row.warn_level),

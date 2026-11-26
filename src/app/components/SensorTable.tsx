@@ -1,6 +1,11 @@
+import { useState } from 'react';
 import { motion } from 'motion/react';
-import { Droplets, Waves, Wind, Thermometer, Radio, BatteryLow, BatteryMedium, BatteryFull } from 'lucide-react';
+import { Droplets, Waves, Wind, Thermometer, Radio, BatteryLow, BatteryMedium, BatteryFull, Pencil } from 'lucide-react';
 import type { Sensor } from '../hooks/useSensors';
+import { useAuth } from '@/context/AuthContext';
+import { SensorEditModal } from './SensorEditModal';
+
+const STATUS_COLOR: Record<Sensor['status'], string> = { online: '#2EC4B6', warning: '#FFB84D', critical: '#DC2626', offline: '#94A3B8' };
 
 const getSensorIcon = (type: string) => {
   switch (type) {
@@ -30,7 +35,12 @@ const getBatteryColor = (level: number) => {
 };
 
 export function SensorTable({ sensors: sensorData, error }: { sensors: Sensor[]; error?: string | null }) {
+  const { role } = useAuth();
+  const canEdit = role === 'admin' || role === 'operator';
+  const [editing, setEditing] = useState<Sensor | null>(null);
+
   return (
+    <>
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
@@ -95,6 +105,11 @@ export function SensorTable({ sensors: sensorData, error }: { sensors: Sensor[];
                 <th className="text-left px-6 py-4 text-ink/70 text-sm" style={{ fontWeight: 600 }}>
                   Last Sync
                 </th>
+                {canEdit && (
+                  <th className="text-center px-6 py-4 text-ink/70 text-sm" style={{ fontWeight: 600 }}>
+                    Actions
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -140,43 +155,18 @@ export function SensorTable({ sensors: sensorData, error }: { sensors: Sensor[];
                       <div
                         className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full"
                         style={{
-                          background: sensor.status === 'online' 
-                            ? 'rgba(46, 196, 182, 0.1)' 
-                            : sensor.status === 'warning'
-                            ? 'rgba(255, 184, 77, 0.1)'
-                            : 'rgba(220, 38, 38, 0.1)',
-                          border: sensor.status === 'online'
-                            ? '1px solid rgba(46, 196, 182, 0.3)'
-                            : sensor.status === 'warning'
-                            ? '1px solid rgba(255, 184, 77, 0.3)'
-                            : '1px solid rgba(220, 38, 38, 0.3)',
-                          boxShadow: sensor.status === 'online'
-                            ? '0 0 12px rgba(46, 196, 182, 0.2)'
-                            : sensor.status === 'warning'
-                            ? '0 0 12px rgba(255, 184, 77, 0.2)'
-                            : '0 0 12px rgba(220, 38, 38, 0.2)',
+                          background: `${STATUS_COLOR[sensor.status]}1a`,
+                          border: `1px solid ${STATUS_COLOR[sensor.status]}4d`,
+                          boxShadow: `0 0 12px ${STATUS_COLOR[sensor.status]}33`,
                         }}
                       >
-                        <div 
+                        <div
                           className="w-2 h-2 rounded-full animate-pulse"
-                          style={{
-                            background: sensor.status === 'online'
-                              ? '#2EC4B6'
-                              : sensor.status === 'warning'
-                              ? '#FFB84D'
-                              : '#DC2626',
-                          }}
+                          style={{ background: STATUS_COLOR[sensor.status] }}
                         />
-                        <span 
+                        <span
                           className="text-xs capitalize"
-                          style={{ 
-                            fontWeight: 600,
-                            color: sensor.status === 'online'
-                              ? '#2EC4B6'
-                              : sensor.status === 'warning'
-                              ? '#FFB84D'
-                              : '#DC2626',
-                          }}
+                          style={{ fontWeight: 600, color: STATUS_COLOR[sensor.status] }}
                         >
                           {sensor.status}
                         </span>
@@ -232,6 +222,20 @@ export function SensorTable({ sensors: sensorData, error }: { sensors: Sensor[];
                         {sensor.lastSync}
                       </span>
                     </td>
+                    {canEdit && (
+                      <td className="px-6 py-4 text-center">
+                        <button
+                          type="button"
+                          aria-label={`Edit ${sensor.name}`}
+                          title="Rename or change location"
+                          onClick={() => setEditing(sensor)}
+                          className="p-2 rounded-xl text-link"
+                          style={{ background: 'rgba(29, 112, 162, 0.1)' }}
+                        >
+                          <Pencil size={16} strokeWidth={2.5} />
+                        </button>
+                      </td>
+                    )}
                   </motion.tr>
                 );
               })}
@@ -248,5 +252,7 @@ export function SensorTable({ sensors: sensorData, error }: { sensors: Sensor[];
         }
       `}</style>
     </motion.div>
+    {editing && <SensorEditModal sensor={editing} onClose={() => setEditing(null)} />}
+    </>
   );
 }

@@ -54,24 +54,41 @@ Supabase → Authentication → Users, then set it up again on next sign-in.
    URL and publishable key, and the device key. Set `MOUNT_HEIGHT_CM` in the `.ino`, then flash it with the Arduino IDE.
 4. The sensor registers itself on its first reading and appears on **Sensor Status** and the Dashboard's
    Water Level card within seconds. It shows *Offline* after 2 minutes of silence and *Warning* at or above its
-   `warn_level` (default 30 cm; edit in the `sensors` table).
+   `warn_level` (default 1 ft) and *Critical* at or above its `danger_level` (default 2 ft). Levels are stored in cm
+   (30.48 and 60.96; edit in the `sensors` table) and shown in feet and inches. Admins and operators can rename a
+   sensor and set its location on **Sensor Status**. Give every device its own `SENSOR_ID`.
 
 ### Analytics reports
 
 The **Analytics** tab builds weekly, monthly and yearly flood reports (filter by area, sensor and level; export
 CSV or print/save as PDF). Run `supabase/migrations/20261026000000_sensor_daily_stats.sql` first: raw readings are
 kept for only 7 days, so every reading also updates a per-day summary (`sensor_daily_stats`) that the reports use.
-A day counts as *Warning* / *Danger* when a sensor's peak reaches its `warn_level` / `danger_level` (defaults
-30 / 60 cm). Reports only cover time since sensors started reporting. Admins can clear test data with
-`delete from public.sensor_daily_stats;`.
+A day counts as *Warning* / *Critical* when a sensor's peak reaches its `warn_level` / `danger_level`. Weeks run
+Sunday to Saturday. Select a day for its details (hour by hour for about the last 7 days). Reports only cover time
+since sensors started reporting. Admins can clear test data with `delete from public.sensor_daily_stats;`.
 
 Set `SIMULATE_READINGS` to `1` to send fake readings and test the website with no sensor attached.
+
+### Testing several sensors at once
+
+`node --env-file=.env scripts/sensor-load-test.mjs --key=<ingest_key>` sends readings from 3 pretend sensors at the
+same moment and reports how many were accepted. It writes to the real database; remove the test sensors afterwards
+with `delete from public.sensors where id like 'loadtest\_%';`.
+
+## Account history
+
+Staff accounts are archived, never deleted (**User Management → Archived** restores them). Admins can see sign-ins,
+sign-outs, account changes and alert activity on **Activity Logs**. A sign-out is recorded when someone uses Sign Out;
+closing the browser or an expired session is not recorded.
+
+Setting this up needs `supabase/migrations/20261126000000_levels_history_archive.sql` and a redeploy of the
+`admin-users` function.
 
 ## Roles
 
 | Role     | Access                                                      |
 |----------|-------------------------------------------------------------|
-| admin    | Everything, including User Management                       |
+| admin    | Everything, including User Management and Activity Logs     |
 | operator | Dashboard, sensors, alert logs, residents, evacuation alarm |
 | viewer   | Dashboard and sensors (read only)                           |
 

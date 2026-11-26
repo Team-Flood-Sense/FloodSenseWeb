@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Lock, Eye, EyeOff, ArrowLeft } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { supabase, recovery } from '@/lib/supabase';
+import { signOut } from '@/lib/session';
 import { useAuth } from '@/context/AuthContext';
 
 // Defined outside ChangePassword so the inputs keep focus while typing
@@ -129,7 +130,7 @@ export function ChangePassword() {
       setForm({ old: '', new: '', confirm: '' });
 
       // Sign out and redirect to signin after 2 seconds
-      await supabase.auth.signOut();
+      await signOut();
       redirectTimer.current = setTimeout(() => navigate('/signin'), 2000);
 
     } catch (err: any) {

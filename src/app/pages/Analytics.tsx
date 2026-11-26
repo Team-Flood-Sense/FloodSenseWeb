@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { motion } from 'motion/react';
-import { AlertTriangle, CalendarDays, Clock, Download, FileText, Waves } from 'lucide-react';
+import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, Clock, Download, FileText, Waves } from 'lucide-react';
 import { StatCard } from '../components/StatCard';
+import { DayDetails } from '../components/DayDetails';
 import { useSensors } from '../hooks/useSensors';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/lib/supabase';
 import {
   LEVEL_COLOR,
   LEVEL_LABEL,
+  addDays,
   buildBuckets,
   chartSvg,
   hours,
@@ -16,11 +18,14 @@ import {
   summarize,
   todayManila,
   toCsv,
+  weekStart,
+  weekTitle,
   type PeriodKind,
   type ReportOptions,
   type SensorInfo,
   type StatRow,
 } from '@/lib/analytics';
+import { formatLevel } from '@/lib/water';
 
 const cardStyle = {
   borderRadius: '28px',
@@ -44,6 +49,9 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+const WEEKS_LISTED = 104;
+const PAGE = 1000;
+
 function download(filename: string, text: string, type: string) {
   const url = URL.createObjectURL(new Blob([text], { type }));
   const a = document.createElement('a');
@@ -65,6 +73,7 @@ export function Analytics() {
   const [area, setArea] = useState('all');
   const [sensorId, setSensorId] = useState('all');
   const [levelFilter, setLevelFilter] = useState<'all' | 'flood' | 'danger'>('all');
+  const [openDay, setOpenDay] = useState<string | null>(null);
 
   const [rows, setRows] = useState<StatRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -85,17 +94,31 @@ export function Analytics() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    supabase
-      .from('sensor_daily_stats')
-      .select('*')
-      .gte('day', range.start)
-      .lte('day', range.end)
-      .then(({ data, error: err }) => {
-        if (cancelled) return;
-        setError(err ? err.message : null);
-        setRows(err ? [] : (data as StatRow[]));
-        setLoading(false);
-      });
+    // Supabase returns at most 1000 rows per request (a year of three sensors is more), so page through
+    (async () => {
+      const all: StatRow[] = [];
+      let message: string | null = null;
+      for (let from = 0; ; from += PAGE) {
+        const { data, error: err } = await supabase
+          .from('sensor_daily_stats')
+          .select('*')
+          .gte('day', range.start)
+          .lte('day', range.end)
+          .order('day')
+          .order('sensor_id')
+          .range(from, from + PAGE - 1);
+        if (err) {
+          message = err.message;
+          break;
+        }
+        all.push(...(data as StatRow[]));
+        if (data.length < PAGE) break;
+      }
+      if (cancelled) return;
+      setError(message);
+      setRows(message ? [] : all);
+      setLoading(false);
+    })();
     return () => {
       cancelled = true;
     };
@@ -113,6 +136,26 @@ export function Analytics() {
     levelFilter === 'all' ? true : levelFilter === 'flood' ? b.level === 'warning' || b.level === 'danger' : b.level === 'danger',
   );
   const unitWord = kind === 'yearly' ? 'Months' : 'Days';
+
+  // Week picker: weeks run Sunday to Saturday, newest first
+  const thisWeek = weekStart(today);
+  const week = range.start;
+  const weeks = useMemo(() => {
+    const list = Array.from({ length: WEEKS_LISTED }, (_, i) => addDays(thisWeek, -7 * i));
+    return kind === 'weekly' && !list.includes(week) ? [...list, week] : list;
+  }, [thisWeek, week, kind]);
+  const weekName = (start: string) =>
+    `${start === thisWeek ? 'This week: ' : start === addDays(thisWeek, -7) ? 'Last week: ' : ''}${weekTitle(start)}`;
+
+  // A month in the yearly view opens that month; a day opens its details
+  const openPeriod = (key: string) => {
+    if (kind === 'yearly') {
+      setMonth(key);
+      setKind('monthly');
+    } else {
+      setOpenDay(key);
+    }
+  };
 
   const options = (): ReportOptions => ({
     kind,
@@ -169,8 +212,18 @@ export function Analytics() {
           </div>
 
           {kind === 'weekly' && (
-            <Field label="Week ending">
-              <input type="date" className={inputClass} style={{ colorScheme: 'light dark' }} value={date} max={today} onChange={(e) => setDate(e.target.value)} />
+            <Field label="Week (Sunday to Saturday)">
+              <div className="flex items-center gap-1">
+                <button type="button" aria-label="Previous week" onClick={() => setDate(addDays(week, -7))} className="p-2 rounded-xl bg-ink/5 text-ink hover:bg-ink/10">
+                  <ChevronLeft size={16} />
+                </button>
+                <select className={inputClass} value={week} onChange={(e) => setDate(e.target.value)}>
+                  {weeks.map((w) => <option key={w} value={w}>{weekName(w)}</option>)}
+                </select>
+                <button type="button" aria-label="Next week" disabled={week >= thisWeek} onClick={() => setDate(addDays(week, 7))} className="p-2 rounded-xl bg-ink/5 text-ink hover:bg-ink/10 disabled:opacity-40">
+                  <ChevronRight size={16} />
+                </button>
+              </div>
             </Field>
           )}
           {kind === 'monthly' && (
@@ -200,7 +253,7 @@ export function Analytics() {
             <select className={inputClass} value={levelFilter} onChange={(e) => setLevelFilter(e.target.value as typeof levelFilter)}>
               <option value="all">All levels</option>
               <option value="flood">Warning or higher</option>
-              <option value="danger">Danger only</option>
+              <option value="danger">Critical only</option>
             </select>
           </Field>
 
@@ -223,15 +276,17 @@ export function Analytics() {
       {/* Summary */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-6">
         <StatCard icon={CalendarDays} label={`${unitWord} with flood levels`} value={`${summary.floodPeriods} of ${summary.periodsWithData}`} valueColor="#FF6B35" iconColor="#FF6B35" iconBg="rgba(255, 107, 53, 0.1)" />
-        <StatCard icon={AlertTriangle} label={`${unitWord} at danger level`} value={summary.dangerPeriods} valueColor="#DC2626" iconColor="#DC2626" iconBg="rgba(220, 38, 38, 0.1)" />
-        <StatCard icon={Waves} label="Highest level" value={summary.highest ? `${summary.highest.peak?.toFixed(1)} ${unit}` : '—'} iconColor="#0EA5E9" iconBg="rgba(14, 165, 233, 0.1)" />
+        <StatCard icon={AlertTriangle} label={`${unitWord} at critical level`} value={summary.dangerPeriods} valueColor="#DC2626" iconColor="#DC2626" iconBg="rgba(220, 38, 38, 0.1)" />
+        <StatCard icon={Waves} label="Highest level" value={summary.highest ? formatLevel(summary.highest.peak, unit) : '—'} iconColor="#0EA5E9" iconBg="rgba(14, 165, 233, 0.1)" />
         <StatCard icon={Clock} label="Time at/above warning" value={hours(summary.warnHours)} iconColor="#FFB84D" iconBg="rgba(255, 184, 77, 0.12)" />
       </div>
 
       {/* Chart */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }} className="bg-surface/80 p-6" style={cardStyle}>
         <h3 className="text-ink text-xl" style={{ fontWeight: 700 }}>Peak water level</h3>
-        <p className="text-ink/60 text-sm mt-1 mb-4">Highest reading per {kind === 'yearly' ? 'month' : 'day'}, {range.title}</p>
+        <p className="text-ink/60 text-sm mt-1 mb-4">
+          Highest reading per {kind === 'yearly' ? 'month' : 'day'}, {range.title}. Select a {kind === 'yearly' ? 'month to see its days' : 'day to see its details'}.
+        </p>
         {noSensors ? (
           <p className="text-ink/55 text-sm py-10 text-center">No sensors yet. Reports appear once a sensor starts sending readings.</p>
         ) : loading ? (
@@ -239,7 +294,17 @@ export function Analytics() {
         ) : summary.periodsWithData === 0 ? (
           <p className="text-ink/55 text-sm py-10 text-center">No readings were recorded in this period for the selected area.</p>
         ) : (
-          <div className="text-ink" dangerouslySetInnerHTML={{ __html: chartSvg(buckets, unit, warn, danger) }} />
+          <div className="overflow-x-auto">
+            <div
+              className={`text-ink ${buckets.length > 12 ? 'min-w-[900px]' : 'min-w-[560px]'}`}
+              style={{ '--chart-halo': 'rgb(var(--surface-rgb))' } as CSSProperties}
+              onClick={(e) => {
+                const key = (e.target as Element).getAttribute('data-key');
+                if (key) openPeriod(key);
+              }}
+              dangerouslySetInnerHTML={{ __html: chartSvg(buckets, unit, warn, danger, true) }}
+            />
+          </div>
         )}
         <div className="flex flex-wrap gap-4 mt-3 text-xs text-ink/70">
           {(['normal', 'warning', 'danger'] as const).map((l) => (
@@ -261,7 +326,7 @@ export function Analytics() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-ink/10 bg-ink/[0.04]">
-                {[kind === 'yearly' ? 'Month' : 'Day', `Peak (${unit})`, `Average (${unit})`, 'At/above warning', 'At/above danger', 'Level', 'Sensor with peak'].map((h) => (
+                {[kind === 'yearly' ? 'Month' : 'Day', 'Peak', 'Average', 'At/above warning', 'At/above critical', 'Level', 'Sensor with peak'].map((h) => (
                   <th key={h} className="text-left px-6 py-4 text-ink/70 text-sm" style={{ fontWeight: 600 }}>{h}</th>
                 ))}
               </tr>
@@ -269,9 +334,15 @@ export function Analytics() {
             <tbody>
               {shown.map((b) => (
                 <tr key={b.key} className="border-b border-ink/5">
-                  <td className="px-6 py-3 text-ink text-sm" style={{ fontWeight: 600 }}>{b.label}</td>
-                  <td className="px-6 py-3 text-ink text-sm">{b.peak === null ? '—' : b.peak.toFixed(1)}</td>
-                  <td className="px-6 py-3 text-ink/80 text-sm">{b.avg === null ? '—' : b.avg.toFixed(1)}</td>
+                  <td className="px-6 py-3 text-ink text-sm" style={{ fontWeight: 600 }}>
+                    {b.level === 'nodata' ? b.label : (
+                      <button type="button" onClick={() => openPeriod(b.key)} className="text-link underline underline-offset-2" style={{ fontWeight: 600 }}>
+                        {b.label}
+                      </button>
+                    )}
+                  </td>
+                  <td className="px-6 py-3 text-ink text-sm">{formatLevel(b.peak, unit)}</td>
+                  <td className="px-6 py-3 text-ink/80 text-sm">{formatLevel(b.avg, unit)}</td>
                   <td className="px-6 py-3 text-ink/80 text-sm">{b.level === 'nodata' ? '—' : hours(b.warnHours)}</td>
                   <td className="px-6 py-3 text-ink/80 text-sm">{b.level === 'nodata' ? '—' : hours(b.dangerHours)}</td>
                   <td className="px-6 py-3">
@@ -289,6 +360,8 @@ export function Analytics() {
           </table>
         </div>
       </motion.div>
+
+      {openDay && <DayDetails day={openDay} rows={rows} sensors={selected} onClose={() => setOpenDay(null)} />}
     </div>
   );
 }

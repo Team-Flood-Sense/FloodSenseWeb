@@ -74,6 +74,9 @@ export function useFloodForecast(sensor: Sensor | null): FloodForecast {
   if (!sensor || sensor.status === 'offline' || sensor.value === null) {
     return { value: 'No data', unit: undefined, rate: null, tone: 'none' };
   }
+  if (sensor.value >= sensor.dangerLevel) {
+    return { value: 'Reached', unit: 'critical level', rate, tone: 'danger' };
+  }
   if (sensor.value >= sensor.warnLevel) {
     return { value: 'Reached', unit: 'warning level', rate, tone: 'danger' };
   }

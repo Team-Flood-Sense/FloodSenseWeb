@@ -6,6 +6,8 @@ import { ThemeToggle } from './ThemeToggle';
 const PAGES: Record<string, { title: string; subtitle: string }> = {
   '/': { title: 'Dashboard', subtitle: 'Flood monitoring overview' },
   '/sensors': { title: 'Sensor Status', subtitle: 'Station health and readings' },
+  '/analytics': { title: 'Analytics', subtitle: 'Flood reports and history' },
+  '/activity': { title: 'Activity Logs', subtitle: 'Sign-ins, account changes and alerts' },
   '/users': { title: 'User Management', subtitle: 'Team members and permissions' },
   '/sms-logs': { title: 'Alert Logs', subtitle: 'SMS, email and app alert trail' },
   '/residents': { title: 'Residents', subtitle: 'SMS and email recipients' },

@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router';
 import { ShieldX } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+import { signOut } from '@/lib/session';
 import { useAuth } from '@/context/AuthContext';
 
 export function Unauthorized() {
@@ -8,7 +8,7 @@ export function Unauthorized() {
   const { role } = useAuth();
 
   async function handleSignOut() {
-    await supabase.auth.signOut();
+    await signOut();
     navigate('/signin');
   }
 

@@ -1,6 +1,6 @@
 // FloodSense admin-users Edge Function
-// Creates, deletes and (de)activates dashboard accounts with the service-role
-// key, which must never be shipped to the browser. Only active admins who have
+// Creates, (de)activates, archives and restores dashboard accounts with the
+// service-role key, which must never be shipped to the browser. Only active admins who have
 // completed 2FA (aal2) may call it.
 //
 // Deploy: supabase functions deploy admin-users --no-verify-jwt
@@ -16,9 +16,9 @@ const corsHeaders = {
 };
 
 const ROLES = ["admin", "operator", "viewer"];
-const STATUSES = ["Active", "Inactive"];
+const STATUSES = ["Active", "Inactive", "Archived"];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-// Effectively permanent; cleared again with "none" on reactivation.
+// Effectively permanent; cleared again with "none" on reactivation or restore.
 const BAN_FOREVER = "876000h";
 
 function json(body: unknown, status = 200) {
@@ -145,44 +145,27 @@ Deno.serve(async (req) => {
   if (body.action === "set-status") {
     const { id, status } = body;
     if (!id || !STATUSES.includes(status)) return json({ error: "Invalid request." }, 400);
-    if (id === caller.user.id && status === "Inactive") {
-      return json({ error: "You cannot deactivate your own account." }, 400);
+    if (id === caller.user.id && status !== "Active") {
+      return json({ error: "You cannot deactivate or archive your own account." }, 400);
     }
 
-    // Profile first: the database refuses to deactivate the last active admin.
-    const { error: profileError } = await admin.from("profiles").update({ status }).eq("id", id);
+    const { data: target } = await admin.from("profiles").select("status, email").eq("id", id).single();
+    if (!target) return json({ error: "User not found." }, 404);
+
+    // Profile first: the database refuses to deactivate or archive the last active admin.
+    const { error: profileError } = await admin
+      .from("profiles")
+      .update({ status, archived_at: status === "Archived" ? new Date().toISOString() : null })
+      .eq("id", id);
     if (profileError) return json({ error: profileError.message }, 400);
 
     // Banning blocks sign-in and token refresh, so existing sessions end too.
     const { error: banError } = await admin.auth.admin.updateUserById(id, {
-      ban_duration: status === "Inactive" ? BAN_FOREVER : "none",
+      ban_duration: status === "Active" ? "none" : BAN_FOREVER,
     });
     if (banError) return json({ error: banError.message }, 400);
 
-    await audit("set-status", id, { status });
-    return json({ ok: true });
-  }
-
-  if (body.action === "delete") {
-    const { id } = body;
-    if (!id) return json({ error: "Missing user id." }, 400);
-    if (id === caller.user.id) return json({ error: "You cannot delete your own account." }, 400);
-
-    const { data: target } = await admin.from("profiles").select("role, status, email").eq("id", id).single();
-    if (target?.role === "admin" && target?.status === "Active") {
-      const { count } = await admin
-        .from("profiles")
-        .select("id", { count: "exact", head: true })
-        .eq("role", "admin")
-        .eq("status", "Active");
-      if ((count ?? 0) <= 1) return json({ error: "Cannot delete the last active admin." }, 400);
-    }
-
-    // Deleting the auth user cascades to public.profiles.
-    const { error } = await admin.auth.admin.deleteUser(id);
-    if (error) return json({ error: error.message }, 400);
-
-    await audit("delete", id, { email: target?.email ?? null });
+    await audit("set-status", id, { status, from: target.status, email: target.email });
     return json({ ok: true });
   }
 

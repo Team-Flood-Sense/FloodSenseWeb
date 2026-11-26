@@ -1,5 +1,6 @@
-import { Radio, CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
+import { Radio, CheckCircle, AlertTriangle, Siren, XCircle } from 'lucide-react';
 import { StatCard } from '../components/StatCard';
+import { LevelRanges } from '../components/LevelRanges';
 import { SensorTable } from '../components/SensorTable';
 import { useSensors } from '../hooks/useSensors';
 
@@ -11,7 +12,7 @@ export function SensorStatus() {
   return (
     <div className="flex-1 space-y-6">
       {/* Top Stats Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-6">
         <StatCard
           icon={Radio}
           label="Total Sensors"
@@ -36,14 +37,24 @@ export function SensorStatus() {
           iconBg="rgba(255, 107, 53, 0.1)"
         />
         <StatCard
-          icon={XCircle}
-          label="Offline"
-          value={count('offline')}
+          icon={Siren}
+          label="Critical"
+          value={count('critical')}
           valueColor="#DC2626"
           iconColor="#DC2626"
           iconBg="rgba(220, 38, 38, 0.1)"
         />
+        <StatCard
+          icon={XCircle}
+          label="Offline"
+          value={count('offline')}
+          valueColor="#94A3B8"
+          iconColor="#94A3B8"
+          iconBg="rgba(148, 163, 184, 0.14)"
+        />
       </div>
+
+      <LevelRanges sensors={sensorData} />
 
       {/* Main Table */}
       <SensorTable sensors={sensorData} error={error} />
